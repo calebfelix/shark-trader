@@ -772,12 +772,38 @@ range conditions. Exit reasons (`psar_trailing_stop: 38`,
 `rsi_overbought: 9` alongside shared `take_profit`/`stop_loss` tags)
 confirm both legs are actually firing, not just one dominating.
 
-**Not yet done - next steps before trusting this**: proper walk-forward
-(train/test) validation, same as every other strategy here (see
-[[feedback-walkforward-validation-standard]]) - this result is a
-same-window sanity check that the routing works, not evidence of an
-edge. Also untested: live dry-run behavior across an actual regime flip
-(the mid-position handoff logic has only been exercised by the backtest
+**Walk-forward result (2026-09-16, same day): weaker than `psar_trend`
+alone, on the only regime this project has ever tested.** Same 70/30
+XAUINR 1h train/test split as every other strategy here - no sweep,
+since `regime_switch` has no independently tunable params of its own
+(one-off script `walkforward_regime_switch.py`, scratchpad only):
+
+| strategy       | test net% | test win% | test trades | test PF | test maxDD |
+|----------------|-----------|-----------|--------------|---------|-------------|
+| mean_reversion | +2.37%    | 62.5%     | 16           | 1.67    | 1.31%       |
+| **regime_switch** | **+5.13%** | **72.7%** | **22**    | **2.16** | **2.08%**  |
+| psar_trend     | +24.03%   | 87.2%     | 78           | 16.96   | 1.03%       |
+
+`regime_switch` beats `mean_reversion` but is far below `psar_trend`
+alone on this window. Reason: this test window - like every window this
+project has ever backtested against - is still gold's sustained uptrend.
+Gating `psar_trend`'s entries behind `mean_reversion`'s ATR-trending
+filter only lets the trend leg trade a *subset* of the time, diluting
+the edge that was working, while the theorized payoff (protection during
+a genuinely ranging/falling market) has never actually been observed -
+this project has no non-trending gold data to test against yet.
+
+**Decision (2026-09-16): `psar_trend` alone remains the strategy for
+the near-term dry-run/real-money plan** - `regime_switch` tested weaker
+on the only condition available to test it against, and its actual
+value proposition (regime robustness) is unproven, not disproven, since
+we've never seen a ranging market in this dataset. `regime_switch`
+stays on branch `regime-switch`, not merged into the strategies most
+likely to be run live. Revisit if a non-trending XAUINR window (or a
+different, currently-ranging symbol) becomes available to test against
+- don't resurrect this on trending-window evidence alone. Also still
+untested: live dry-run behavior across an actual regime flip (the
+mid-position handoff logic has only been exercised by the backtest
 engine's deterministic replay, never a live poll loop).
 
 ### Strategies evaluated and rejected from the user's firm's codebase (2026-09-16)
