@@ -38,6 +38,31 @@ python main.py run --strategy mean_reversion
 See `README.md` for full usage. This file is about *why* things are
 built the way they are, so future changes stay consistent.
 
+## Test suite (2026-09-16)
+
+`tests/` (pytest, `requirements-dev.txt`) covers the pure logic most
+likely to cause a real loss if silently broken: indicator math
+(`test_indicators.py`), position sizing/risk halts
+(`test_risk.py`), fee gating (`test_orders.py`), P&L sign and the
+backtest loop (`test_backtest_engine.py`), every strategy's entry/exit
+decisions (`test_strategies.py`), and HMAC signing/JS-number-safety
+(`test_exchange_signing.py`) - the last one pure logic only, no test
+here ever calls the live API. Several tests are direct regressions for
+real bugs found earlier in this project (the psar_trend sizing/exit
+decoupling bug, the SHORT fee-gate sign bug, the JS whole-number-float
+signing bug, the min-notional round-up-not-down bug) - see each bug's
+own CLAUDE.md section for the original incident. Run with:
+```
+venv\Scripts\python.exe -m pytest tests/ -v
+```
+Deliberately NOT covered: the live Shark Exchange API itself (that's
+`verify_order_endpoint.py` and manual dry-runs), and `main.py`/
+`live_engine.py`'s I/O-heavy wiring (better exercised by an actual
+dry-run than a mocked poll loop). Add tests here alongside any future
+strategy or risk-math change, same as the regression tests already here
+were added after their bugs were found - don't wait for the next bug to
+start.
+
 ### Why this shape
 
 The original three scripts (`shark_backtest.py`, `shark_mean_reversion_bot.py`,
