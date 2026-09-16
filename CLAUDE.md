@@ -667,7 +667,11 @@ obviously beat more trades with similar-ish thin edge) - revisit if
 
 **`psar_trend`'s walk-forward held up much better**: win rate stayed
 ~87-90% consistently across both train and test at
-`interval=1h af=0.03/0.2 offset=0.01 sl=2.0 tp=6-8`, with
+`interval=1h af=0.03/0.3 offset=0.01 sl=2.0 tp=6-8` (corrected 2026-09-16 -
+this was previously mistyped here as `max_af=0.2`; `config.json` was
+also wrong, running `15m`/`af=0.02`/`tp=4.0` the whole time, meaning
+`psar_trend` had never actually run its own validated config until
+fixed alongside the `regime_switch` work below), with
 **TEST net=+24.03%, PF=16.96, maxDD=1.03%, 78 trades** over the same
 ~56-day test window. This is a real robustness signal (train and test
 performance are similar, not a collapse) - but comes with a specific,
@@ -708,6 +712,73 @@ closes out the "can mean_reversion be tuned further" question raised
 this session; a shorter interval was the most promising untried lever
 and it didn't move the needle. `psar_trend` remains the leading
 candidate, with the regime-dependency caveat above still unresolved.
+
+## New strategy: `regime_switch` (2026-09-16, branch `regime-switch`)
+
+Added a fifth strategy, `shark/strategies/regime_switch.py`, aimed at the
+"all-weather" gap neither existing strategy covers alone: `mean_reversion`
+deliberately stands aside during trends (its own ATR filter), and
+`psar_trend` is a pure trend-rider that has only ever been tested in
+gold's sustained uptrend (see the unresolved regime-dependency caveat
+above). Rather than reimplementing signal logic, `regime_switch` wraps
+one `MeanReversionStrategy` instance and one `PSARTrendStrategy` instance
+and routes between them:
+
+- **Regime detection reuses `mean_reversion`'s own `is_trending` ATR
+  flag** - no new indicator needed, since that filter already answers
+  exactly this question. `is_trending=True` -> route to `psar_trend`
+  ("trend" leg), `False` -> route to `mean_reversion` ("range" leg).
+- **An open position always finishes out under whichever leg opened it**,
+  even if the regime flips while it's open - avoids extra exits/fees on
+  every flip and avoids cutting a trend-follow position short right as
+  PSAR would trail it further. This required a small interface addition:
+  `EntryPlan`/`Position` (`shark/strategies/base.py`) gained an optional
+  `strategy_tag: Optional[str] = None` field (default `None`, unused by
+  every other strategy - same additive/backward-compatible pattern as
+  when `side` was added for long+short support). Both engines gained a
+  one-line passthrough (`strategy_tag=plan.strategy_tag`) when
+  constructing `Position`. `exit_decision` reads `position.strategy_tag`
+  to route to the same sub-strategy that opened it.
+- **Fee gating is per-leg, not global**: `regime_switch.fee_gate_enabled
+  = False` at the class level (bypassing the engines' uniform gate check),
+  and `entry_plan` applies `mean_reversion`'s fee gate manually via
+  `orders.fee_gate_passes()` only for range-leg plans - the trend leg
+  passes through ungated, matching `psar_trend`'s own
+  `fee_gate_enabled = False`.
+- **Config reuses the existing tuned blocks** rather than duplicating
+  params: `strategies.regime_switch` in `config.json` holds only
+  `kline_interval` (`"1h"` - both sub-strategies are validated at 1h).
+  `main.py`'s `build_strategy()` special-cases `regime_switch` to inject
+  the full `mean_reversion`/`psar_trend`/`fees` sub-configs so
+  `RegimeSwitchStrategy.__init__` can construct its two sub-strategy
+  instances - the only place this strategy's wiring differs from every
+  other strategy's flat `strategy_params()` lookup.
+
+**Found and fixed while building this**: `config.json`'s `strategies.psar_trend`
+block had never actually matched its own walk-forward-validated config -
+see the correction above (was `15m`/`af=0.02`/`tp=4.0`, corrected to
+`1h`/`af=0.03,0.3`/`offset=0.01`/`tp=6.0`). Fixed as part of this work
+since `regime_switch`'s trend leg needed the real validated config, not
+the stale one.
+
+**First backtest (same-window sanity check only, NOT walk-forward
+validated yet)**: 4500-candle XAUINR 1h history, 97 trades, 77.3% win
+rate, **net +22.35%, PF=2.05, maxDD=2.53%**. Lower than `psar_trend`
+alone's standalone 113% net over the same window - expected, since the
+trend leg here only fires on the subset of candles `mean_reversion`'s
+ATR filter flags as actually trending, so it captures less of PSAR's
+pure-trend upside in exchange for also trading through (weaker-edge)
+range conditions. Exit reasons (`psar_trailing_stop: 38`,
+`rsi_overbought: 9` alongside shared `take_profit`/`stop_loss` tags)
+confirm both legs are actually firing, not just one dominating.
+
+**Not yet done - next steps before trusting this**: proper walk-forward
+(train/test) validation, same as every other strategy here (see
+[[feedback-walkforward-validation-standard]]) - this result is a
+same-window sanity check that the routing works, not evidence of an
+edge. Also untested: live dry-run behavior across an actual regime flip
+(the mid-position handoff logic has only been exercised by the backtest
+engine's deterministic replay, never a live poll loop).
 
 ### Strategies evaluated and rejected from the user's firm's codebase (2026-09-16)
 

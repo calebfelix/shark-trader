@@ -111,6 +111,7 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                                 take_profit_price=plan.take_profit_price,
                                 entry_is_maker=plan.is_maker,
                                 side=plan.side,
+                                strategy_tag=plan.strategy_tag,
                             )
                             bars_since_open = 0
                             print(f"    entry={position.entry_price:.2f} SL={position.stop_loss_price:.2f} "

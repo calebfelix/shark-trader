@@ -86,6 +86,7 @@ def run_backtest(strategy: Strategy, candles: list[dict], config: dict) -> tuple
                             entry_is_maker=plan.is_maker,
                             side=plan.side,
                             opened_at=idx,
+                            strategy_tag=plan.strategy_tag,
                         )
 
         strategy.note_indicators(indicators)

@@ -28,7 +28,15 @@ def build_strategy(name: str, config: dict):
     if name not in STRATEGIES:
         raise SystemExit(f"Unknown strategy '{name}'. Choices: {', '.join(STRATEGIES)}")
     cls = STRATEGIES[name]
-    return cls(strategy_params(config, name))
+    params = dict(strategy_params(config, name))
+    if name == "regime_switch":
+        # regime_switch wraps mean_reversion and psar_trend internally
+        # rather than duplicating their tuned params in its own config
+        # block - inject the sub-configs it needs to build them.
+        params["_mean_reversion"] = strategy_params(config, "mean_reversion")
+        params["_psar_trend"] = strategy_params(config, "psar_trend")
+        params["_fees"] = config["fees"]
+    return cls(params)
 
 
 def cmd_backtest(args, config: dict):

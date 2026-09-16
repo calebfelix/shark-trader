@@ -64,12 +64,15 @@
       "max_hold_candles": 15
     },
     "psar_trend": {
-      "kline_interval": "15m",
-      "initial_af": 0.02,
-      "max_af": 0.2,
-      "entry_limit_offset_pct": 0.02,
+      "kline_interval": "1h",
+      "initial_af": 0.03,
+      "max_af": 0.3,
+      "entry_limit_offset_pct": 0.01,
       "stop_loss_pct": 2.0,
-      "take_profit_pct": 4.0
+      "take_profit_pct": 6.0
+    },
+    "regime_switch": {
+      "kline_interval": "1h"
     }
   }
 }

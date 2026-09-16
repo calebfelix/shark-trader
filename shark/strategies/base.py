@@ -17,6 +17,11 @@ class Position:
     entry_is_maker: bool
     side: str  # "LONG" or "SHORT"
     opened_at: Optional[int] = None  # candle index at open; set by backtest_engine only
+    strategy_tag: Optional[str] = None  # which sub-strategy opened this - only used by
+                                         # regime_switch.py to route exit_decision to the
+                                         # same leg that opened the position, even if the
+                                         # regime has since flipped. Unused (None) by every
+                                         # other strategy.
 
 
 @dataclass
@@ -26,6 +31,7 @@ class EntryPlan:
     take_profit_price: float
     is_maker: bool
     side: str  # "LONG" or "SHORT"
+    strategy_tag: Optional[str] = None  # see Position.strategy_tag
 
 
 class Strategy:
