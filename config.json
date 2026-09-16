@@ -1,0 +1,75 @@
+{
+  "symbol": "XAUINR",
+  "base_url": "https://api.sharkexchange.in",
+  "dry_run": true,
+  "poll_seconds": 60,
+
+  "account_capital": 2000.0,
+  "risk_per_trade_pct": 1.0,
+
+  "leverage": {
+    "value": 20,
+    "margin_mode": "ISOLATED",
+    "allow_min_notional_override": false
+  },
+
+  "max_daily_loss_pct": 3.0,
+  "max_consecutive_losses": 4,
+  "cooldown_minutes_after_halt": 60,
+
+  "fees": {
+    "maker_fee_pct": 0.016,
+    "taker_fee_pct": 0.040,
+    "gst_pct": 18.0
+  },
+
+  "backtest": {
+    "lookback_candles": 4500,
+    "output_chart_path": "backtest_equity_curve.png"
+  },
+
+  "strategies": {
+    "mean_reversion": {
+      "kline_interval": "1h",
+      "bb_period": 20,
+      "bb_stddev": 2.0,
+      "rsi_period": 14,
+      "rsi_oversold": 30,
+      "rsi_overbought": 70,
+      "atr_period": 14,
+      "atr_trend_threshold_pct": 0.5,
+      "stop_loss_pct": 1.5,
+      "take_profit_pct": 0.8,
+      "entry_limit_offset_pct": 0.02,
+      "min_profit_to_fee_ratio": 3.0
+    },
+    "sma": {
+      "kline_interval": "1m",
+      "fast_period": 9,
+      "slow_period": 21,
+      "stop_loss_pct": 1.5,
+      "take_profit_pct": 3.0
+    },
+    "scalp": {
+      "kline_interval": "1m",
+      "bb_period": 10,
+      "bb_stddev": 2.0,
+      "rsi_period": 7,
+      "rsi_oversold": 25,
+      "rsi_overbought": 75,
+      "stop_loss_pct": 0.3,
+      "take_profit_pct": 0.4,
+      "entry_limit_offset_pct": 0.02,
+      "min_profit_to_fee_ratio": 2.0,
+      "max_hold_candles": 15
+    },
+    "psar_trend": {
+      "kline_interval": "15m",
+      "initial_af": 0.02,
+      "max_af": 0.2,
+      "entry_limit_offset_pct": 0.02,
+      "stop_loss_pct": 2.0,
+      "take_profit_pct": 4.0
+    }
+  }
+}

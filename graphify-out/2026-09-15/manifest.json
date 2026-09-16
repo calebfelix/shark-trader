@@ -1,0 +1,110 @@
+{
+  "config.json": {
+    "mtime": 1789456418.8475025,
+    "seen": 1789456611.4400961,
+    "ast_hash": "0fa61586fabb93616decb0b357535b49",
+    "semantic_hash": ""
+  },
+  "main.py": {
+    "mtime": 1789456418.848014,
+    "seen": 1789456611.4401052,
+    "ast_hash": "aa2dfb3f11e460826dc6f205c86b4ab1",
+    "semantic_hash": ""
+  },
+  "shark/__init__.py": {
+    "mtime": 1789456419.002907,
+    "seen": 1789456611.440108,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": ""
+  },
+  "shark/backtest_engine.py": {
+    "mtime": 1789456419.0249536,
+    "seen": 1789456611.4401097,
+    "ast_hash": "5b2d0cbd959c1d4aa5f31734f2cea543",
+    "semantic_hash": ""
+  },
+  "shark/config.py": {
+    "mtime": 1789456419.0229373,
+    "seen": 1789456611.4401114,
+    "ast_hash": "f72e39cd92bec12ec7bdf1036c245999",
+    "semantic_hash": ""
+  },
+  "shark/exchange.py": {
+    "mtime": 1789456419.000895,
+    "seen": 1789456611.4401126,
+    "ast_hash": "24b3c3ccb5bdfe26195d759ca43f34a7",
+    "semantic_hash": ""
+  },
+  "shark/indicators.py": {
+    "mtime": 1789456418.99472,
+    "seen": 1789456611.4401143,
+    "ast_hash": "3e8238dfcd97a1e5233f3f0f55506434",
+    "semantic_hash": ""
+  },
+  "shark/live_engine.py": {
+    "mtime": 1789456418.9967327,
+    "seen": 1789456611.4401157,
+    "ast_hash": "5d89104b7807b8082c7027b509f08292",
+    "semantic_hash": ""
+  },
+  "shark/orders.py": {
+    "mtime": 1789456419.000895,
+    "seen": 1789456611.440117,
+    "ast_hash": "b6665249bc8a47c502f3c1e91def0af3",
+    "semantic_hash": ""
+  },
+  "shark/performance.py": {
+    "mtime": 1789456418.99472,
+    "seen": 1789456611.4401183,
+    "ast_hash": "d806c8230cae8aef29314cbb5beb629b",
+    "semantic_hash": ""
+  },
+  "shark/risk.py": {
+    "mtime": 1789456418.9987488,
+    "seen": 1789456611.4401197,
+    "ast_hash": "b4a50229687b812899ca5362fbcec61a",
+    "semantic_hash": ""
+  },
+  "shark/strategies/__init__.py": {
+    "mtime": 1789456419.0213425,
+    "seen": 1789456611.4401217,
+    "ast_hash": "d6c4d9540e9dd37180f64f46eae0694c",
+    "semantic_hash": ""
+  },
+  "shark/strategies/base.py": {
+    "mtime": 1789456419.015304,
+    "seen": 1789456611.4401228,
+    "ast_hash": "3892c34cf074589190b4a182725eebf9",
+    "semantic_hash": ""
+  },
+  "shark/strategies/mean_reversion.py": {
+    "mtime": 1789456419.0193303,
+    "seen": 1789456611.4401245,
+    "ast_hash": "4729ddbba93952120bae0d3c423b8322",
+    "semantic_hash": ""
+  },
+  "shark/strategies/sma.py": {
+    "mtime": 1789456419.0173166,
+    "seen": 1789456611.4401257,
+    "ast_hash": "a495471628485ff5cd3f6b515a80ce22",
+    "semantic_hash": ""
+  },
+  "CLAUDE.md": {
+    "mtime": 1789456419.0284019,
+    "seen": 1789456611.440127,
+    "ast_hash": "df21049902a8e9f6e3c50e292e99f1ac",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1789456419.0273914,
+    "seen": 1789456611.4401283,
+    "ast_hash": "85d2bb57363ec076bb0b4a7c1ddde9d9",
+    "semantic_hash": ""
+  },
+  "requirements.txt": {
+    "mtime": 1789456419.0339148,
+    "seen": 1789456611.4401298,
+    "ast_hash": "848f1448d3e71801a35333c862ee87b8",
+    "semantic_hash": ""
+  }
+}

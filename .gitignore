@@ -1,0 +1,6 @@
+.env
+venv/
+__pycache__/
+*.pyc
+shark_bot_trade_log_*.csv
+backtest_equity_curve.png

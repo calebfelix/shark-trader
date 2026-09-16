@@ -1,0 +1,134 @@
+{
+  "config.json": {
+    "mtime": 1789543394.8523738,
+    "seen": 1789544488.4535503,
+    "ast_hash": "68988094705ad2ad5b2e4a94a7ba58c1",
+    "semantic_hash": "68988094705ad2ad5b2e4a94a7ba58c1"
+  },
+  "main.py": {
+    "mtime": 1789459356.1931627,
+    "seen": 1789544488.4535577,
+    "ast_hash": "342df4c70d5f942925aedb1c99c85049",
+    "semantic_hash": "342df4c70d5f942925aedb1c99c85049"
+  },
+  "shark/__init__.py": {
+    "mtime": 1789456419.002907,
+    "seen": 1789544488.4535606,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "shark/backtest_engine.py": {
+    "mtime": 1789457719.611792,
+    "seen": 1789544488.453563,
+    "ast_hash": "f5fbe6ea1894e1d64d36da392b9d6121",
+    "semantic_hash": "f5fbe6ea1894e1d64d36da392b9d6121"
+  },
+  "shark/config.py": {
+    "mtime": 1789456419.0229373,
+    "seen": 1789544488.4535646,
+    "ast_hash": "f72e39cd92bec12ec7bdf1036c245999",
+    "semantic_hash": "f72e39cd92bec12ec7bdf1036c245999"
+  },
+  "shark/exchange.py": {
+    "mtime": 1789461544.891287,
+    "seen": 1789544488.4535658,
+    "ast_hash": "3d7169c8d4de2ff4ead2ac9b9fada64d",
+    "semantic_hash": "3d7169c8d4de2ff4ead2ac9b9fada64d"
+  },
+  "shark/indicators.py": {
+    "mtime": 1789456418.99472,
+    "seen": 1789544488.453568,
+    "ast_hash": "3e8238dfcd97a1e5233f3f0f55506434",
+    "semantic_hash": "3e8238dfcd97a1e5233f3f0f55506434"
+  },
+  "shark/live_engine.py": {
+    "mtime": 1789459344.5265112,
+    "seen": 1789544488.4535692,
+    "ast_hash": "6e7b6da48504a33a5551a309f8919226",
+    "semantic_hash": "6e7b6da48504a33a5551a309f8919226"
+  },
+  "shark/orders.py": {
+    "mtime": 1789457699.8403654,
+    "seen": 1789544488.453571,
+    "ast_hash": "b28c49147ffa3742cfba2b99d543637f",
+    "semantic_hash": "b28c49147ffa3742cfba2b99d543637f"
+  },
+  "shark/performance.py": {
+    "mtime": 1789456418.99472,
+    "seen": 1789544488.4535732,
+    "ast_hash": "d806c8230cae8aef29314cbb5beb629b",
+    "semantic_hash": "d806c8230cae8aef29314cbb5beb629b"
+  },
+  "shark/risk.py": {
+    "mtime": 1789459418.009011,
+    "seen": 1789544488.453575,
+    "ast_hash": "cc8bacf72e0ec7ed092c5c55380617d6",
+    "semantic_hash": "cc8bacf72e0ec7ed092c5c55380617d6"
+  },
+  "shark/strategies/__init__.py": {
+    "mtime": 1789541815.0920439,
+    "seen": 1789544488.453576,
+    "ast_hash": "2169f0242000f85fd3bd2d32d01a93a2",
+    "semantic_hash": "2169f0242000f85fd3bd2d32d01a93a2"
+  },
+  "shark/strategies/base.py": {
+    "mtime": 1789457673.6948998,
+    "seen": 1789544488.453578,
+    "ast_hash": "5afb403dd84eda53a80ac6d47a5adfc6",
+    "semantic_hash": "5afb403dd84eda53a80ac6d47a5adfc6"
+  },
+  "shark/strategies/mean_reversion.py": {
+    "mtime": 1789457678.3581786,
+    "seen": 1789544488.4535794,
+    "ast_hash": "98daf2dffb13f951ae75358360a246cc",
+    "semantic_hash": "98daf2dffb13f951ae75358360a246cc"
+  },
+  "shark/strategies/sma.py": {
+    "mtime": 1789457683.783067,
+    "seen": 1789544488.4535842,
+    "ast_hash": "ab553cc648d25ee5ba3feda8d957b263",
+    "semantic_hash": "ab553cc648d25ee5ba3feda8d957b263"
+  },
+  "CLAUDE.md": {
+    "mtime": 1789544199.1824112,
+    "seen": 1789544488.4535866,
+    "ast_hash": "3581ca27e8a25f5d4122be1c611724e6",
+    "semantic_hash": "3581ca27e8a25f5d4122be1c611724e6"
+  },
+  "README.md": {
+    "mtime": 1789457851.0673387,
+    "seen": 1789544488.4535882,
+    "ast_hash": "d0090f6c92375551f14ca52fcbce17a8",
+    "semantic_hash": "d0090f6c92375551f14ca52fcbce17a8"
+  },
+  "requirements.txt": {
+    "mtime": 1789456419.0339148,
+    "seen": 1789544488.4535894,
+    "ast_hash": "848f1448d3e71801a35333c862ee87b8",
+    "semantic_hash": "848f1448d3e71801a35333c862ee87b8"
+  },
+  "shark/strategies/scalp.py": {
+    "mtime": 1789457770.392428,
+    "seen": 1789544488.453582,
+    "ast_hash": "3f28f2ada70fb9ba0e99ef2a46a67dd4",
+    "semantic_hash": "3f28f2ada70fb9ba0e99ef2a46a67dd4"
+  },
+  "diagnose_leverage.py": {
+    "mtime": 1789460935.794251,
+    "seen": 1789544488.4535549,
+    "ast_hash": "ea106c8140bb0d9a43c8281f875627aa",
+    "semantic_hash": "ea106c8140bb0d9a43c8281f875627aa"
+  },
+  "shark/strategies/psar_trend.py": {
+    "mtime": 1789544370.3894176,
+    "seen": 1789544488.4535804,
+    "ast_hash": "2e37a4134e94998c456d2942132904c5",
+    "semantic_hash": "2e37a4134e94998c456d2942132904c5"
+  },
+  "verify_order_endpoint.py": {
+    "mtime": 1789461946.2934742,
+    "seen": 1789544488.453585,
+    "ast_hash": "7a504f91895450a95deb68aeb21f5acd",
+    "semantic_hash": "7a504f91895450a95deb68aeb21f5acd"
+  }
+}
