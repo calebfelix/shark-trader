@@ -667,8 +667,12 @@ obviously beat more trades with similar-ish thin edge) - revisit if
 
 **`psar_trend`'s walk-forward held up much better**: win rate stayed
 ~87-90% consistently across both train and test at
-`interval=1h af=0.03/0.2 offset=0.01 sl=2.0 tp=6-8`, with
-**TEST net=+24.03%, PF=16.96, maxDD=1.03%, 78 trades** over the same
+`interval=1h af=0.03/0.3 offset=0.01 sl=2.0 tp=6-8` (corrected 2026-09-16 -
+this was previously mistyped here as `max_af=0.2`; `config.json` was
+also wrong, running `15m`/`af=0.02`/`tp=4.0` the whole time, meaning
+`psar_trend` had never actually run its own validated config until now -
+fixed directly on this branch ahead of the multi-day dry-run test),
+with **TEST net=+24.03%, PF=16.96, maxDD=1.03%, 78 trades** over the same
 ~56-day test window. This is a real robustness signal (train and test
 performance are similar, not a collapse) - but comes with a specific,
 unresolved caveat: XAUINR (gold) has been in a sustained uptrend through
