@@ -5,3 +5,7 @@ __pycache__/
 shark_bot_trade_log_*.csv
 backtest_equity_curve.png
 *.log
+credentials.json
+credentials.json.tmp
+local_settings.json
+local_settings.json.tmp

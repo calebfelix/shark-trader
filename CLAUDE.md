@@ -63,6 +63,35 @@ strategy or risk-math change, same as the regression tests already here
 were added after their bugs were found - don't wait for the next bug to
 start.
 
+## Dashboard (2026-10-19)
+
+`dashboard.py` is a local FastAPI app (`pip install -r requirements.txt`,
+then `python dashboard.py` -> http://127.0.0.1:8765). It shows simulated
+equity, performance stats, open position, recent trades and the bot's
+console output, and has Start/Stop buttons for the bot. It reads the
+`shark_bot_trade_log_*.csv` files plus `dashboard_bot.log` (output of a bot
+it started) and launches/kills `main.py run` as a subprocess - it never
+touches the exchange or API keys. Deliberate limits, keep them:
+- **Dry run vs real account is a Settings-page switch**, stored in the
+  gitignored `local_settings.json` (`shark/local_settings.py`) and layered
+  over `config.json` by `shark/config.py` - committed `config.json` stays
+  `"dry_run": true`, so `dry_run: false` can't be pushed by accident.
+  Switching to real needs saved API keys + typing `REAL MONEY` (checked
+  server-side), and is refused while a bot runs. A live Start needs its own
+  confirmation (`confirm_live`). Switching back to dry run is one click.
+  Claude must never flip this itself or start a live run - that is the
+  user's own deliberate action (see the never-execute-real-trades rule). The
+  bot's real-order path (as opposed to `verify_order_endpoint.py`) has never
+  been exercised end to end.
+- Bound to 127.0.0.1, Host-header allowlist, and POSTs need an
+  `X-Requested-With: dashboard` header so other web pages can't drive it.
+- "Balance" is simulated (config `account_capital` + cumulative net P&L
+  from the CSVs), not the exchange wallet. The CSV's own `equity_after`
+  column resets every bot session, so the dashboard recomputes instead.
+- It detects any running `main.py run` process (including one started from
+  a terminal) and refuses a second start; Stop kills it and discards any
+  open simulated position (closed trades are already in the CSV).
+
 ### Why this shape
 
 The original three scripts (`shark_backtest.py`, `shark_mean_reversion_bot.py`,
@@ -598,9 +627,12 @@ regimes before trusting it further, and keep dry-running before any
   assumes limit orders always fill at the intended price (no slippage
   modeling) — real performance will likely be somewhat worse than
   backtested performance.
-- API keys are read from environment variables (`SHARK_API_KEY`,
-  `SHARK_API_SECRET`) via `shark/config.py`, never stored in
-  `config.json` or hardcoded. Keep it that way — config.json is meant to
+- API keys are loaded by `shark/config.py` from the gitignored
+  `credentials.json` (written by the dashboard's Settings page, see
+  `shark/credentials.py`; plain text on the machine running the code),
+  falling back to the `SHARK_API_KEY` / `SHARK_API_SECRET` env vars. Never
+  stored in `config.json` or hardcoded, and `credentials.json` must stay in
+  `.gitignore`. The dashboard never returns the secret from any endpoint. Keep it that way — config.json is meant to
   be freely editable/shareable, credentials are not.
 - `.env` (gitignored, `python-dotenv` loads it automatically) is the
   other supported way to set those two vars, for local dev convenience.

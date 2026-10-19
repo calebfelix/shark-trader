@@ -86,8 +86,10 @@ report as the backtest, not just a scrolling log.
 Everything tunable lives in `config.json` — symbol, risk %, fees,
 poll interval, and each strategy's own parameters under
 `strategies.<name>`. No code changes needed for routine tuning.
-API keys are the one exception: those stay as `SHARK_API_KEY` /
-`SHARK_API_SECRET` environment variables, never in `config.json`.
+API keys are the one exception: they never go in `config.json`. Save them
+on the dashboard's Settings page (written to the gitignored
+`credentials.json`), or use the `SHARK_API_KEY` / `SHARK_API_SECRET`
+environment variables as a fallback.
 
 ## Adding a new strategy
 
