@@ -103,7 +103,7 @@ polled every 30s) - the dashboard places no orders. Deliberate limits, keep them
 and Stop use `psutil` (not PowerShell/`taskkill`), and the bot is spawned in
 its own session on Linux, so the same code runs on a Linux VPS. Verified on
 Windows only (start/detect/stop with a stand-in `main.py`); the Linux path
-and `deploy/*.service` + README "Running on a VPS" steps have never been run
+and `deploy/*` (setup_ubuntu.sh, *.service) + docs/DEPLOY_UBUNTU.md steps have never been run
 on a real server. The dashboard must stay bound to `127.0.0.1` (SSH tunnel
 access) - it has no authentication. `find_bot_pids()` matches ANY
 `main.py run` process on the machine, so `stop_bot()` kills a bot started

@@ -122,91 +122,23 @@ Things to know:
 - Mode and credentials live in `local_settings.json` / `credentials.json`,
   both gitignored. `config.json` stays `dry_run: true` in git.
 
-## 4. Running on a VPS (Linux)
+## 4. Running on an Ubuntu VPS
 
-Steps for an Ubuntu/Debian server. The code is cross-platform (process
-handling uses `psutil`, verified on Windows), but these steps haven't been run
-on a real VPS yet - if a step fails, fix the doc. The bot and dashboard run on
-the VPS; you open the dashboard from your own machine over SSH.
+Ubuntu 22.04 / 24.04. On the server:
 
-**1. Get the code and install**
 ```
-sudo apt update && sudo apt install -y python3 python3-venv git
 git clone https://github.com/calebfelix/shark-trader.git
 cd shark-trader
-python3 -m venv venv
-venv/bin/pip install -r requirements.txt
+bash deploy/setup_ubuntu.sh
 ```
 
-**2. Keep the clock accurate** — signed requests fail with `error 4008
-"Timestamp older than 5 seconds"` if the server clock drifts:
-```
-sudo timedatectl set-ntp true
-timedatectl            # "System clock synchronized: yes"
-```
-
-**3. Edit `config.json` on the server** — `symbol`, `account_capital`,
-`risk_per_trade_pct`, `leverage`, etc. Keep `"dry_run": true` to start. (If
-you later `git pull` and hit a conflict on `config.json`, `git stash`
-your edit, pull, then `git stash pop`.)
-
-**4. Whitelist the server's IP on your Shark API key.** Find it with
-`curl -4 ifconfig.me`, then add that address to the key's allowed IPs in
-your Shark Exchange API settings. Without it, signed calls fail with
-`error 4009 "IP address not whitelisted"`. Use a VPS with a fixed IP.
-
-**5. Run the dashboard as a service**
-```
-# edit User and paths in the file first (defaults assume user "trader" in /home/trader)
-sudo cp deploy/shark-dashboard.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now shark-dashboard
-sudo systemctl status shark-dashboard
-```
-
-**6. Open the dashboard from your own computer** with an SSH tunnel:
-```
-ssh -L 8765:127.0.0.1:8765 trader@YOUR_VPS_IP
-```
-then browse to http://127.0.0.1:8765 on your machine. Keep the SSH session
-open while you use it. Don't open port 8765 in the firewall.
-
-**7. Add keys and start.** On the Settings page paste your API key and
-secret (saved on the server in `credentials.json`, mode 600). Pick a
-strategy on the main page and press **Start**. Watch a dry run first;
-switch to real account only when you're ready, from the same Settings page.
-
-**Optional: auto-restart the bot.** `deploy/shark-bot.service` runs the bot
-itself as a service that restarts after crashes/reboots (useful if the
-exchange is down for maintenance when it starts). Use it *instead of*
-starting the bot from the dashboard, and stop it with
-`sudo systemctl stop shark-bot` rather than the dashboard's Stop button.
-
-**Updating the server**
-```
-cd shark-trader && git pull
-venv/bin/pip install -r requirements.txt
-sudo systemctl restart shark-dashboard      # a running bot keeps running
-```
-
-**Backups / state.** Everything the server owns is gitignored and local:
-`credentials.json`, `local_settings.json`, `shark_bot_trade_log_*.csv`,
-`dashboard_bot.log`. Back up the CSVs if you want the trade history.
-
-**Troubleshooting**
-
-| Symptom | Cause / fix |
-|---|---|
-| `4009 IP address not whitelisted` | Add the VPS IP (not your home IP) to the API key, and save/confirm it. |
-| `4008 Timestamp older than 5 seconds` | Clock drift - enable NTP (step 2). |
-| `503 no healthy upstream` / startup crash | Exchange maintenance or outage; wait and restart (or use the bot service, which retries). |
-| Dashboard unreachable | Check `systemctl status shark-dashboard` and that your SSH tunnel is open. |
-| Bot "already running" but you can't see it | Another `main.py run` process exists (e.g. the bot service); `pgrep -af "main.py run"`. |
-
-**Security checklist:** SSH key login (disable password auth), firewall allowing
-only SSH, dashboard reachable only through the tunnel, API key created
-with the minimum permissions and IP whitelist, and `dry_run` left on until
-you've verified behavior with small amounts.
+That installs everything, runs the tests, and starts the dashboard as a
+systemd service (reachable only through an SSH tunnel). Then whitelist the
+server's IP on your Shark API key, open the tunnel
+(`ssh -L 8765:127.0.0.1:8765 user@server`), add your keys on the Settings
+page, and press Start. Full guide - configuration, operations, updating,
+auto-restarting the bot, going live, security and troubleshooting:
+**[docs/DEPLOY_UBUNTU.md](docs/DEPLOY_UBUNTU.md)**.
 
 ## Before running anything live
 
