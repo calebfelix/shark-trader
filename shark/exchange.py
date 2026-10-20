@@ -62,7 +62,7 @@ class ExchangeClient:
         query_string = "&".join(f"{k}={v}" for k, v in params.items())
         signature = self._sign(query_string)
         headers = {"api-key": self.api_key, "signature": signature}
-        resp = requests.get(f"{self.base_url}{endpoint}?{query_string}", headers=headers)
+        resp = requests.get(f"{self.base_url}{endpoint}?{query_string}", headers=headers, timeout=15)
         self._raise_with_body(resp)
         return resp.json()
 
@@ -177,6 +177,31 @@ class ExchangeClient:
     def get_open_orders(self, symbol: str | None = None) -> dict:
         params = {"symbol": symbol} if symbol else None
         return self.signed_get("/v1/order/open-orders", params)
+
+    def get_futures_wallet(self, margin_asset: str = "INR") -> dict:
+        """Read-only. Futures wallet balances via GET /v1/wallet/futures-wallet/details
+        (signed). Returns floats; unrealised P&L is cross + isolated combined."""
+        resp = self.signed_get("/v1/wallet/futures-wallet/details", {"marginAsset": margin_asset})
+        data = resp["data"] if isinstance(resp.get("data"), dict) else resp
+        if "walletBalance" not in data:
+            raise ValueError("Unexpected wallet response shape (no walletBalance field)")
+
+        def num(key):
+            try:
+                return float(data[key])
+            except (KeyError, TypeError, ValueError):
+                return None
+
+        pnl_parts = [num("unrealisedPnlCross"), num("unrealisedPnlIsolated")]
+        known = [v for v in pnl_parts if v is not None]
+        return {
+            "wallet_balance": num("walletBalance"),
+            "withdrawable": num("withdrawableBalance"),
+            "locked": num("lockedBalance"),
+            "margin_balance": num("marginBalance"),
+            "unrealised_pnl": sum(known) if known else None,
+            "asset": data.get("marginAsset", margin_asset),
+        }
 
     def get_positions(self, position_status: str, symbol: str | None = None) -> dict:
         """Read-only. position_status is one of OPEN/CLOSED/LIQUIDATED."""

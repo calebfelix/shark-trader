@@ -26,6 +26,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
+import psutil  # noqa: E402
 import uvicorn  # noqa: E402
 from fastapi import Depends, FastAPI, Header, HTTPException  # noqa: E402
 from fastapi.responses import HTMLResponse, JSONResponse  # noqa: E402
@@ -33,6 +34,7 @@ from pydantic import BaseModel, SecretStr  # noqa: E402
 from starlette.middleware.trustedhost import TrustedHostMiddleware  # noqa: E402
 
 from shark.config import load_config as load_full_config  # noqa: E402
+from shark.exchange import ExchangeClient  # noqa: E402
 from shark.credentials import clear_credentials, get_credentials, key_hint, set_credentials  # noqa: E402
 from shark.local_settings import set_dry_run  # noqa: E402
 from shark.strategies import STRATEGIES  # noqa: E402
@@ -45,9 +47,17 @@ CSV_PREFIX = "shark_bot_trade_log_"
 LOG_TAIL_LINES = 60
 MAX_TRADES_SHOWN = 50
 
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-_NEW_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 _proc_cache = {"at": 0.0, "pids": []}
+_BOT_CMD = re.compile(r"main\.py\"?\s+(--config\s+\S+\s+)?run\b")
+
+
+def _detach_kwargs() -> dict:
+    """Popen options so the bot outlives the dashboard request and (on
+    Linux) gets its own session/process group; no console window on Windows."""
+    if os.name == "nt":
+        return {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                | getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+    return {"start_new_session": True}
 
 
 def load_config() -> dict:
@@ -55,28 +65,24 @@ def load_config() -> dict:
     return load_full_config(str(CONFIG_PATH))
 
 
+def is_bot_cmdline(cmdline: list[str] | None) -> bool:
+    """True for `... main.py [--config X] run ...` (not backtest or other scripts)."""
+    return bool(_BOT_CMD.search(" ".join(cmdline or [])))
+
+
 def find_bot_pids() -> list[int]:
-    """PIDs of any `main.py run ...` python process, whoever started it.
-    Cached a few seconds - this shells out to PowerShell."""
+    """PIDs of any `main.py run ...` python process, whoever started it
+    (works on Windows and Linux). Cached a few seconds."""
     now = time.time()
     if now - _proc_cache["at"] < 4:
         return _proc_cache["pids"]
-    cmd = ("Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" | "
-           "Select-Object ProcessId, CommandLine | ConvertTo-Json -Compress")
     pids: list[int] = []
-    try:
-        out = subprocess.run(["powershell", "-NoProfile", "-Command", cmd],
-                             capture_output=True, text=True, timeout=15,
-                             creationflags=_NO_WINDOW).stdout.strip()
-        rows = json.loads(out) if out else []
-        if isinstance(rows, dict):
-            rows = [rows]
-        for r in rows:
-            line = r.get("CommandLine") or ""
-            if re.search(r"main\.py\"?\s+(--config\s+\S+\s+)?run\b", line):
-                pids.append(int(r["ProcessId"]))
-    except Exception:
-        pids = _proc_cache["pids"]
+    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            if "python" in (proc.info["name"] or "").lower() and is_bot_cmdline(proc.info["cmdline"]):
+                pids.append(proc.info["pid"])
+        except psutil.Error:
+            continue
     _proc_cache.update(at=now, pids=pids)
     return pids
 
@@ -100,8 +106,7 @@ def start_bot(strategy: str, confirm_live: bool = False) -> tuple[bool, str]:
                   f"strategy={strategy} ===\n".encode())
         subprocess.Popen([sys.executable, "-u", "main.py", "run", "--strategy", strategy],
                          cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
-                         stdin=subprocess.DEVNULL, env=env,
-                         creationflags=_NEW_GROUP | _NO_WINDOW)
+                         stdin=subprocess.DEVNULL, env=env, **_detach_kwargs())
     _proc_cache["at"] = 0.0
     return True, f"Started {strategy} " + ("(LIVE - real orders)." if live else "(dry run).")
 
@@ -111,9 +116,24 @@ def stop_bot() -> tuple[bool, str]:
     pids = find_bot_pids()
     if not pids:
         return False, "No bot is running."
+    victims = []
     for pid in pids:
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
-                       capture_output=True, creationflags=_NO_WINDOW)
+        try:
+            proc = psutil.Process(pid)
+            victims.extend(proc.children(recursive=True) + [proc])
+        except psutil.Error:
+            continue
+    for proc in victims:
+        try:
+            proc.terminate()
+        except psutil.Error:
+            pass
+    _, alive = psutil.wait_procs(victims, timeout=5)
+    for proc in alive:
+        try:
+            proc.kill()
+        except psutil.Error:
+            pass
     _proc_cache["at"] = 0.0
     return True, "Stopped. Any open simulated position was discarded; closed trades are kept in the CSV."
 
@@ -196,6 +216,31 @@ def current_position(log_lines: list[str]) -> dict:
     return {"status_line": status, "side": side if side != "None" else None, "detail": detail}
 
 
+_balance_cache: dict = {"at": 0.0, "value": None}
+
+
+def fetch_balance() -> dict:
+    """Real exchange wallet (read-only GET). Only ever called in real-account
+    mode - dry run never makes a signed request. Cached briefly so the page
+    can poll without hammering the exchange."""
+    cfg = load_config()
+    if cfg.get("dry_run") is True:
+        return {"ok": False, "dry_run": True, "error": "Real balance is only shown in real-account mode."}
+    if not (cfg["api_key"] and cfg["api_secret"]):
+        return {"ok": False, "error": "No API credentials saved - add them on the Settings page."}
+    now = time.time()
+    if _balance_cache["value"] is not None and now - _balance_cache["at"] < 15:
+        return _balance_cache["value"]
+    try:
+        client = ExchangeClient(cfg["base_url"], cfg["api_key"], cfg["api_secret"])
+        value = {"ok": True, **client.get_futures_wallet("INR"),
+                 "fetched_at": datetime.now().isoformat(timespec="seconds")}
+    except Exception as e:
+        value = {"ok": False, "error": str(e)[:300]}
+    _balance_cache.update(at=now, value=value)
+    return value
+
+
 def build_state() -> dict:
     cfg = load_config()
     trades = read_trades()
@@ -238,6 +283,11 @@ class StartRequest(BaseModel):
 @app.get("/", response_class=HTMLResponse)
 def index():
     return PAGE
+
+
+@app.get("/api/balance")
+def balance():
+    return fetch_balance()
 
 
 @app.get("/api/state")
@@ -350,6 +400,7 @@ PAGE = r"""<!doctype html>
   }
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--ink);
   font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 .wrap{max-width:1100px;margin:0 auto;padding:20px 16px 48px}
@@ -419,6 +470,11 @@ input[type=password],input[type=text]{width:100%;font:inherit;color:var(--ink);b
   </header>
   <p class="msg" id="msg" role="status"></p>
 
+  <section id="walletbox" hidden>
+    <h2>Exchange wallet (real funds, read from Shark Exchange)</h2>
+    <div class="kpis" id="wallet"></div>
+    <p class="msg" id="walletmsg"></p>
+  </section>
   <section class="kpis" id="kpis"></section>
 
   <section class="card">
@@ -461,7 +517,7 @@ let state = null, busy = false;
 function renderKpis(s){
   const pf = s.profit_factor == null ? (s.wins > 0 ? "∞" : "—") : fmt(s.profit_factor);
   const items = [
-    ["Equity", fmt(s.equity) + " ₹", "start " + fmt(s.start_capital) + " ₹", ""],
+    ["Bot equity (calculated)", fmt(s.equity) + " ₹", "start " + fmt(s.start_capital) + " ₹", ""],
     ["Net P&L", signed(s.net) + " ₹", signed(s.net_pct) + "%  ·  today " + signed(s.today_net), cls(s.net)],
     ["Win rate", s.win_rate == null ? "—" : fmt(s.win_rate,1) + "%", s.wins + "W / " + s.losses + "L", ""],
     ["Profit factor", pf, "avg win " + signed(s.avg_win) + " / loss " + signed(s.avg_loss), ""],
@@ -572,7 +628,7 @@ function render(d){
 }
 
 async function refresh(){
-  try { render(await api("/api/state")); }
+  try { render(await api("/api/state")); refreshWallet(); }
   catch(e){ $("msg").textContent = "Can't reach the dashboard server."; }
 }
 
@@ -594,7 +650,33 @@ $("stopbtn").addEventListener("click", () => {
                     : "Stop the bot? An open simulated position will be discarded.";
   if (confirm(warn)) act("/api/stop", {});
 });
+function renderWallet(w){
+  const root = $("wallet"); root.replaceChildren();
+  if (!w.ok){ $("walletmsg").textContent = "Could not read the wallet: " + (w.error || "unknown error"); return; }
+  $("walletmsg").textContent = "Updated " + w.fetched_at.replace("T"," ") + " - read-only, straight from the exchange.";
+  const items = [
+    ["Wallet balance", fmt(w.wallet_balance) + " ₹", "total in futures wallet", ""],
+    ["Available", fmt(w.withdrawable) + " ₹", "withdrawable", ""],
+    ["Locked margin", fmt(w.locked) + " ₹", "in open positions", ""],
+    ["Unrealised P&L", signed(w.unrealised_pnl) + " ₹", "open positions", cls(w.unrealised_pnl)],
+  ];
+  for (const [l,v,sub,c] of items)
+    root.append(el("div",{class:"card k"}, el("div",{class:"l"},l), el("div",{class:"v "+c},v), el("div",{class:"s"},sub)));
+}
+
+let lastWalletAt = 0;
+async function refreshWallet(){
+  const live = state && !state.config.dry_run;
+  $("walletbox").hidden = !live;
+  if (!live) return;
+  if (Date.now() - lastWalletAt < 30000) return;
+  lastWalletAt = Date.now();
+  try { renderWallet(await api("/api/balance")); }
+  catch(e){ $("walletmsg").textContent = "Could not reach the dashboard server."; }
+}
+
 refresh(); setInterval(refresh, 5000);
+setInterval(refreshWallet, 5000);
 </script>
 </body>
 </html>

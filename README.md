@@ -99,6 +99,115 @@ and reporting are handled for you by the shared engines), add a config
 block under `strategies` in `config.json`, and register the class in
 `shark/strategies/__init__.py`'s `STRATEGIES` dict.
 
+## 3. Dashboard
+
+```
+python dashboard.py            # then open http://127.0.0.1:8765
+```
+
+A local web page (FastAPI) showing the bot's closed trades, calculated
+equity and performance stats, the open position, the bot's console output,
+and Start/Stop buttons. The **Settings** page saves your API key and secret
+to `credentials.json` (gitignored, never pushed) and switches between
+**dry run** (simulated, the default) and **real account** (needs saved keys
+and typing `REAL MONEY`). In real-account mode it also shows your actual
+Shark wallet balance (read-only).
+
+Things to know:
+- "Bot equity (calculated)" is the bot's own estimate from `config.json`'s
+  `account_capital` plus its trade log. In real-account mode the separate
+  "Exchange wallet" card is the real balance.
+- It listens on `127.0.0.1` only and has **no login**. Don't expose it to the
+  internet; on a server, reach it through an SSH tunnel (below).
+- Mode and credentials live in `local_settings.json` / `credentials.json`,
+  both gitignored. `config.json` stays `dry_run: true` in git.
+
+## 4. Running on a VPS (Linux)
+
+Steps for an Ubuntu/Debian server. The code is cross-platform (process
+handling uses `psutil`, verified on Windows), but these steps haven't been run
+on a real VPS yet - if a step fails, fix the doc. The bot and dashboard run on
+the VPS; you open the dashboard from your own machine over SSH.
+
+**1. Get the code and install**
+```
+sudo apt update && sudo apt install -y python3 python3-venv git
+git clone https://github.com/calebfelix/shark-trader.git
+cd shark-trader
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
+```
+
+**2. Keep the clock accurate** — signed requests fail with `error 4008
+"Timestamp older than 5 seconds"` if the server clock drifts:
+```
+sudo timedatectl set-ntp true
+timedatectl            # "System clock synchronized: yes"
+```
+
+**3. Edit `config.json` on the server** — `symbol`, `account_capital`,
+`risk_per_trade_pct`, `leverage`, etc. Keep `"dry_run": true` to start. (If
+you later `git pull` and hit a conflict on `config.json`, `git stash`
+your edit, pull, then `git stash pop`.)
+
+**4. Whitelist the server's IP on your Shark API key.** Find it with
+`curl -4 ifconfig.me`, then add that address to the key's allowed IPs in
+your Shark Exchange API settings. Without it, signed calls fail with
+`error 4009 "IP address not whitelisted"`. Use a VPS with a fixed IP.
+
+**5. Run the dashboard as a service**
+```
+# edit User and paths in the file first (defaults assume user "trader" in /home/trader)
+sudo cp deploy/shark-dashboard.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now shark-dashboard
+sudo systemctl status shark-dashboard
+```
+
+**6. Open the dashboard from your own computer** with an SSH tunnel:
+```
+ssh -L 8765:127.0.0.1:8765 trader@YOUR_VPS_IP
+```
+then browse to http://127.0.0.1:8765 on your machine. Keep the SSH session
+open while you use it. Don't open port 8765 in the firewall.
+
+**7. Add keys and start.** On the Settings page paste your API key and
+secret (saved on the server in `credentials.json`, mode 600). Pick a
+strategy on the main page and press **Start**. Watch a dry run first;
+switch to real account only when you're ready, from the same Settings page.
+
+**Optional: auto-restart the bot.** `deploy/shark-bot.service` runs the bot
+itself as a service that restarts after crashes/reboots (useful if the
+exchange is down for maintenance when it starts). Use it *instead of*
+starting the bot from the dashboard, and stop it with
+`sudo systemctl stop shark-bot` rather than the dashboard's Stop button.
+
+**Updating the server**
+```
+cd shark-trader && git pull
+venv/bin/pip install -r requirements.txt
+sudo systemctl restart shark-dashboard      # a running bot keeps running
+```
+
+**Backups / state.** Everything the server owns is gitignored and local:
+`credentials.json`, `local_settings.json`, `shark_bot_trade_log_*.csv`,
+`dashboard_bot.log`. Back up the CSVs if you want the trade history.
+
+**Troubleshooting**
+
+| Symptom | Cause / fix |
+|---|---|
+| `4009 IP address not whitelisted` | Add the VPS IP (not your home IP) to the API key, and save/confirm it. |
+| `4008 Timestamp older than 5 seconds` | Clock drift - enable NTP (step 2). |
+| `503 no healthy upstream` / startup crash | Exchange maintenance or outage; wait and restart (or use the bot service, which retries). |
+| Dashboard unreachable | Check `systemctl status shark-dashboard` and that your SSH tunnel is open. |
+| Bot "already running" but you can't see it | Another `main.py run` process exists (e.g. the bot service); `pgrep -af "main.py run"`. |
+
+**Security checklist:** SSH key login (disable password auth), firewall allowing
+only SSH, dashboard reachable only through the tunnel, API key created
+with the minimum permissions and IP whitelist, and `dry_run` left on until
+you've verified behavior with small amounts.
+
 ## Before running anything live
 
 - Re-verify current fees at `sharkexchange.in/fee-structure` — `config.json`

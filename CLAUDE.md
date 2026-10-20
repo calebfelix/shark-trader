@@ -70,8 +70,11 @@ then `python dashboard.py` -> http://127.0.0.1:8765). It shows simulated
 equity, performance stats, open position, recent trades and the bot's
 console output, and has Start/Stop buttons for the bot. It reads the
 `shark_bot_trade_log_*.csv` files plus `dashboard_bot.log` (output of a bot
-it started) and launches/kills `main.py run` as a subprocess - it never
-touches the exchange or API keys. Deliberate limits, keep them:
+it started) and launches/kills `main.py run` as a subprocess. In dry-run
+mode it never touches the exchange or API keys. In real-account mode only,
+it also shows the real futures wallet (`GET /v1/wallet/futures-wallet/details`
+via `ExchangeClient.get_futures_wallet`, signed + read-only, cached 15s,
+polled every 30s) - the dashboard places no orders. Deliberate limits, keep them:
 - **Dry run vs real account is a Settings-page switch**, stored in the
   gitignored `local_settings.json` (`shark/local_settings.py`) and layered
   over `config.json` by `shark/config.py` - committed `config.json` stays
@@ -85,12 +88,28 @@ touches the exchange or API keys. Deliberate limits, keep them:
   been exercised end to end.
 - Bound to 127.0.0.1, Host-header allowlist, and POSTs need an
   `X-Requested-With: dashboard` header so other web pages can't drive it.
-- "Balance" is simulated (config `account_capital` + cumulative net P&L
-  from the CSVs), not the exchange wallet. The CSV's own `equity_after`
-  column resets every bot session, so the dashboard recomputes instead.
+- "Bot equity (calculated)" is simulated (config `account_capital` +
+  cumulative net P&L from the CSVs); the separate "Exchange wallet" card
+  (real-account mode only) is the real balance. Even in live mode the CSV
+  P&L is the bot's own estimate (planned exit prices, estimated fees - the
+  live engine doesn't confirm fills), so the two can differ. The CSV's own
+  `equity_after` column resets every bot session, so the dashboard
+  recomputes instead.
 - It detects any running `main.py run` process (including one started from
   a terminal) and refuses a second start; Stop kills it and discards any
   open simulated position (closed trades are already in the CSV).
+
+**Cross-platform / VPS (2026-10-20).** The dashboard's process detection
+and Stop use `psutil` (not PowerShell/`taskkill`), and the bot is spawned in
+its own session on Linux, so the same code runs on a Linux VPS. Verified on
+Windows only (start/detect/stop with a stand-in `main.py`); the Linux path
+and `deploy/*.service` + README "Running on a VPS" steps have never been run
+on a real server. The dashboard must stay bound to `127.0.0.1` (SSH tunnel
+access) - it has no authentication. `find_bot_pids()` matches ANY
+`main.py run` process on the machine, so `stop_bot()` kills a bot started
+outside the dashboard too (never call it in tests). The server's public IP
+must be whitelisted on the Shark API key (error 4009) and its clock kept
+NTP-synced (error 4008).
 
 ### Why this shape
 

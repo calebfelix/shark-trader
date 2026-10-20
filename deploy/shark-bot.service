@@ -1,0 +1,24 @@
+# OPTIONAL: run the bot itself as a service so it restarts after a crash or
+# a reboot (e.g. when the exchange was down for maintenance at startup).
+# Use this INSTEAD of starting the bot from the dashboard: if this service
+# is running, the dashboard's Start refuses, and its Stop button would just
+# be undone by systemd restarting the bot - stop it with systemctl instead.
+#   sudo cp deploy/shark-bot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now shark-bot
+# It follows whatever mode is saved on the Settings page / config.json
+# (dry run unless you switched to the real account yourself).
+[Unit]
+Description=Shark Trader bot (psar_trend)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=trader
+WorkingDirectory=/home/trader/shark-trader
+ExecStart=/home/trader/shark-trader/venv/bin/python -u main.py run --strategy psar_trend
+Restart=on-failure
+RestartSec=60
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

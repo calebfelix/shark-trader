@@ -3,3 +3,4 @@ matplotlib
 python-dotenv
 fastapi
 uvicorn
+psutil

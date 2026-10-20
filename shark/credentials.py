@@ -33,6 +33,7 @@ def set_credentials(api_key: str, api_secret: str) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps({"api_key": api_key, "api_secret": api_secret}, indent=2),
                    encoding="utf-8")
+    os.chmod(tmp, 0o600)  # owner-only on Linux/macOS; effectively a no-op on Windows
     os.replace(tmp, path)
 
 

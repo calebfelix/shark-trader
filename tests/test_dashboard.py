@@ -56,3 +56,17 @@ class TestCurrentPosition:
         p = current_position(lines)
         assert p["side"] == "LONG"
         assert p["detail"] == "entry=98.05 SL=96.09 TP=103.93"
+
+
+class TestBotProcessMatching:
+    def test_matches_run_command(self):
+        from dashboard import is_bot_cmdline
+        assert is_bot_cmdline(["python", "-u", "main.py", "run", "--strategy", "psar_trend"])
+        assert is_bot_cmdline(["/usr/bin/python3", "main.py", "--config", "c.json", "run"])
+
+    def test_ignores_other_commands(self):
+        from dashboard import is_bot_cmdline
+        assert not is_bot_cmdline(["python", "main.py", "backtest", "--strategy", "x"])
+        assert not is_bot_cmdline(["python", "dashboard.py"])
+        assert not is_bot_cmdline(["python", "verify_order_endpoint.py"])
+        assert not is_bot_cmdline(None)

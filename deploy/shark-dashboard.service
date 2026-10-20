@@ -1,0 +1,23 @@
+# Dashboard as a systemd service. Edit User and the paths, then:
+#   sudo cp deploy/shark-dashboard.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now shark-dashboard
+# The dashboard listens on 127.0.0.1:8765 only - reach it through an SSH
+# tunnel (see README "Running on a VPS"). Never expose it to the internet:
+# it has no login and can start a live bot and read/replace API keys.
+[Unit]
+Description=Shark Trader dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=trader
+WorkingDirectory=/home/trader/shark-trader
+ExecStart=/home/trader/shark-trader/venv/bin/python dashboard.py
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+# A bot started from the dashboard keeps running if the dashboard restarts.
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
