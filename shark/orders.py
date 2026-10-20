@@ -33,10 +33,17 @@ def fee_gate_passes(plan, maker_fee_pct: float, taker_fee_pct: float,
 
 
 class OrderExecutor:
-    def __init__(self, exchange: ExchangeClient, symbol: str, dry_run: bool):
+    def __init__(self, exchange: ExchangeClient, symbol: str, dry_run: bool, registry=None):
         self.exchange = exchange
         self.symbol = symbol
         self.dry_run = dry_run
+        self.registry = registry  # BotRegistry: remembers which orders are ours
+
+    def _send(self, params: dict) -> dict:
+        resp = self.exchange.signed_post("/v1/order/place-order", params)
+        if self.registry is not None and isinstance(resp, dict):
+            self.registry.add_order(resp.get("clientOrderId"))
+        return resp
 
     def place_limit_order(self, side: str, quantity: float, price: float, reduce_only: bool) -> dict:
         """Used for entries/exits intended to fill as MAKER (cheaper).
@@ -58,7 +65,7 @@ class OrderExecutor:
             print(f"[DRY RUN] Would place {side} LIMIT order for {params['quantity']} "
                   f"{self.symbol} @ {params['price']} reduceOnly={reduce_only} (targeting MAKER fee)")
             return {"dry_run": True, **params}
-        return self.exchange.signed_post("/v1/order/place-order", params)
+        return self._send(params)
 
     def place_market_order(self, side: str, quantity: float, reduce_only: bool) -> dict:
         """Used for time-critical exits (e.g. stop-loss) - immediate TAKER fill."""
@@ -75,7 +82,7 @@ class OrderExecutor:
             print(f"[DRY RUN] Would place {side} MARKET order for {params['quantity']} "
                   f"{self.symbol} reduceOnly={reduce_only} (TAKER fee, immediate exit)")
             return {"dry_run": True, **params}
-        return self.exchange.signed_post("/v1/order/place-order", params)
+        return self._send(params)
 
     def place_stop_market(self, side: str, quantity: float, stop_price: float) -> dict:
         """Reduce-only STOP_MARKET resting on the exchange: closes (never flips)
@@ -96,4 +103,4 @@ class OrderExecutor:
             print(f"[DRY RUN] Would place {side} STOP_MARKET for {params['quantity']} "
                   f"{self.symbol} stopPrice={params['stopPrice']} reduceOnly=True")
             return {"dry_run": True, **params}
-        return self.exchange.signed_post("/v1/order/place-order", params)
+        return self._send(params)

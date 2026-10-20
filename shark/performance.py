@@ -19,16 +19,34 @@ class PerformanceTracker:
         self.trades = []
         self.session_start = datetime.now()
 
-        if not os.path.exists(self.csv_path):
-            with open(self.csv_path, "w", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    "timestamp", "symbol", "entry_price", "exit_price", "qty",
-                    "exit_reason", "gross_pnl", "fees", "net_pnl", "equity_after"
-                ])
+        self._ensure_csv()
 
-    def record(self, entry_price, exit_price, qty, exit_reason, gross_pnl, fees):
-        net_pnl = gross_pnl - fees
+    # Legacy columns first (older files / readers keep working), the cost breakdown appended after them.
+    COLUMNS = ["timestamp", "symbol", "entry_price", "exit_price", "qty", "exit_reason", "gross_pnl", "fees",
+               "net_pnl", "equity_after", "side", "fee_discount", "funding", "source", "entry_role",
+               "exit_role", "position_id"]
+
+    def _ensure_csv(self):
+        """Create the CSV, or upgrade an older one (fewer columns) in place without losing rows."""
+        if os.path.exists(self.csv_path):
+            with open(self.csv_path, newline="") as f:
+                rows = list(csv.DictReader(f))
+                f.seek(0)
+                header = next(csv.reader(f), [])
+            if header == self.COLUMNS:
+                return
+        else:
+            rows = []
+        with open(self.csv_path, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=self.COLUMNS, extrasaction="ignore")
+            w.writeheader()
+            w.writerows(rows)
+
+    def record(self, entry_price, exit_price, qty, exit_reason, gross_pnl, fees,
+               discount=0.0, funding=0.0, extra=None):
+        """net = gross - fees + fee discount + funding (funding is signed: paid < 0). `fees` is the trading
+        fee BEFORE discount, so every cost shows up in its own column."""
+        net_pnl = gross_pnl - fees + discount + funding
         self.equity += net_pnl
         row = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -41,12 +59,14 @@ class PerformanceTracker:
             "fees": fees,
             "net_pnl": net_pnl,
             "equity_after": self.equity,
+            "side": "", "fee_discount": discount, "funding": funding, "source": "",
+            "entry_role": "", "exit_role": "", "position_id": "",
         }
+        row.update(extra or {})
         self.trades.append(row)
 
         with open(self.csv_path, "a", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(row.values())
+            csv.DictWriter(f, fieldnames=self.COLUMNS, extrasaction="ignore").writerow(row)
 
         if len(self.trades) % self.print_summary_every_n_trades == 0:
             self.print_summary()
@@ -75,8 +95,10 @@ class PerformanceTracker:
         print(f"[Performance] Session runtime: {runtime}  |  Trades: {n}")
         print(f"  Starting equity: {self.starting_capital:.2f} INR  ->  "
               f"Current: {self.equity:.2f} INR ({net_pnl / self.starting_capital * 100:+.2f}%)")
-        print(f"  Gross P&L: {gross_pnl:+.2f} | Fees paid: {total_fees:.2f} | "
-              f"Net P&L: {net_pnl:+.2f}")
+        total_disc = sum(t["fee_discount"] for t in self.trades)
+        total_fund = sum(t["funding"] for t in self.trades)
+        print(f"  Gross P&L: {gross_pnl:+.2f} | Fees paid: {total_fees:.2f} | Fee discounts: +{total_disc:.2f} | "
+              f"Funding: {total_fund:+.2f} | Net P&L: {net_pnl:+.2f}")
         print(f"  Win rate: {win_rate:.1f}% ({len(wins)}W/{len(losses)}L) | "
               f"Avg win: {avg_win:+.2f} | Avg loss: {avg_loss:+.2f} | "
               f"Profit factor: {profit_factor:.2f}")

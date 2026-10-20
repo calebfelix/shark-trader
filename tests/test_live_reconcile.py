@@ -4,6 +4,7 @@ Drives the real live_engine.run() against a fake exchange - no network."""
 import pytest
 
 from shark import live_engine
+from shark.bot_registry import BotRegistry
 from shark.exchange import ExchangeClient
 from shark.orders import OrderExecutor
 from shark.strategies.base import EntryPlan, Strategy
@@ -64,6 +65,9 @@ class FakeExchange(ExchangeClient):
                                 "stopPrice": params["stopPrice"], "side": params["side"]})
         elif params["reduceOnly"] is False and self.fill_on_place:
             self.position = pos("LONG" if params["side"] == "BUY" else "SHORT", params["quantity"], 100.0)
+            self.trade_history.append({"id": 1000 + self._n, "positionId": "p1", "clientOrderId": cid,
+                                       "side": params["side"], "quantity": params["quantity"], "price": 100.0,
+                                       "time": "2026-10-20T13:58:56.927Z"})
         elif params["reduceOnly"] is False:
             self.orders.append({"clientOrderId": cid, "symbol": SYMBOL, "type": params["type"]})
         elif params["reduceOnly"] is True and params["type"] == "MARKET":
@@ -106,8 +110,10 @@ class FakeRisk:
 
 
 class FakeTracker:
-    def __init__(self): self.trades = []
-    def record(self, entry, exit_, qty, reason, gross, fees): self.trades.append((reason, entry, exit_, qty))
+    def __init__(self): self.trades = []; self.rows = []
+    def record(self, entry, exit_, qty, reason, gross, fees, discount=0.0, funding=0.0, extra=None):
+        self.trades.append((reason, entry, exit_, qty))
+        self.rows.append({"gross": gross, "fees": fees, "discount": discount, "funding": funding, **(extra or {})})
 
 
 CONFIG = {"symbol": SYMBOL, "poll_seconds": 0, "dry_run": False, "order_timeout_seconds": 180,
@@ -120,11 +126,15 @@ def no_sleep(monkeypatch):
     monkeypatch.setattr(live_engine.time, "sleep", lambda s: None)
 
 
-def run_loop(ex, strategy=None, config=None, risk=None, tracker=None, quote_to_inr_rate=1.0):
+def run_loop(ex, strategy=None, config=None, risk=None, tracker=None, quote_to_inr_rate=1.0,
+             registry=None, own_p1=True):
     strategy = strategy or FakeStrategy()
     risk, tracker = risk or FakeRisk(), tracker or FakeTracker()
     cfg = dict(CONFIG, **(config or {}))
-    executor = OrderExecutor(ex, SYMBOL, cfg["dry_run"])
+    registry = registry or BotRegistry(None)
+    if own_p1:
+        registry.add_position("p1")          # a position this bot opened earlier (e.g. before a restart)
+    executor = OrderExecutor(ex, SYMBOL, cfg["dry_run"], registry=registry)
     try:
         live_engine.run(strategy, ex, executor, risk, tracker, cfg, quote_to_inr_rate=quote_to_inr_rate)
     except Stop:
@@ -266,8 +276,8 @@ class TestExchangeReaders:
         ex = FakeExchange()
         ex.position = pos("SHORT", -0.25, 99.5)
         got = ex.get_open_position(SYMBOL)
-        assert got == {"side": "SHORT", "qty": 0.25, "entry_price": 99.5, "position_id": "p1",
-                       "opened_at_ms": 1792504736942}
+        assert {k: got[k] for k in ("side", "qty", "entry_price", "position_id", "opened_at_ms")} == \
+            {"side": "SHORT", "qty": 0.25, "entry_price": 99.5, "position_id": "p1", "opened_at_ms": 1792504736942}
 
     def test_other_symbols_ignored_and_bad_side_raises(self):
         ex = FakeExchange()
@@ -345,6 +355,9 @@ def test_engine_books_the_exchanges_real_numbers_in_inr():
     realized, costs = risk.results[0]
     assert realized == pytest.approx(47.26)                    # INR straight from Shark, NOT scaled again
     assert costs == pytest.approx(2.52 - 0.25 + 0.59)          # fees - discounts - funding(signed)
+    row = tracker.rows[0]                                       # each cost lands in its own column
+    assert (row["fees"], row["discount"], row["funding"]) == pytest.approx((2.52, 0.25, -0.59))
+    assert (row["source"], row["side"], row["entry_role"], row["position_id"]) == ("settled", "LONG", "TAKER", "p1")
 
 
 def test_estimate_fallback_is_converted_to_inr():
@@ -373,3 +386,97 @@ def test_dry_run_pnl_is_converted_to_inr_for_the_risk_limits():
     _, risk, tracker = run_loop(ex, strat, config={"dry_run": True}, quote_to_inr_rate=96.0)
     gross, _fees = risk.results[0]
     assert gross == pytest.approx((106.0 - 100.0) * 0.5 * 96.0)          # 3 USDT -> 288 INR, so the 3% daily-loss limit is in INR
+
+
+# ---- isolation: the owner's manual trades are never touched ----
+
+def test_foreign_position_is_left_completely_alone():
+    ex = FakeExchange()
+    ex.position = pos("LONG", 3.0, 99.0)                  # opened by hand: no bot order behind it
+    ex.orders = [{"clientOrderId": "manual-stop", "symbol": SYMBOL, "type": "STOP_MARKET", "stopPrice": 90.0}]
+    strat = FakeStrategy()
+    strat.entry = EntryPlan(100.0, 98.0, 106.0, True, "LONG")
+    strat.exit = ("sar_flip", 101.0, False)               # would close a position if it thought it owned one
+    _, risk, tracker = run_loop(ex, strat, own_p1=False)
+    assert ex.placed == []                                  # no stop, no entry, no exit
+    assert ex.cancelled == []                               # the manual stop order survives
+    assert ex.orders[0]["clientOrderId"] == "manual-stop"
+    assert tracker.trades == [] and risk.results == []      # never booked as a bot trade
+
+
+def test_position_is_adopted_when_its_fill_came_from_a_bot_order():
+    ex = FakeExchange()
+    ex.position = pos("LONG", 0.5, 100.0)
+    ex.trade_history = [{"id": 1, "positionId": "p1", "clientOrderId": "bot-entry-1", "side": "BUY",
+                         "quantity": 0.5, "price": 100.0, "time": "2026-10-20T13:58:56.927Z"}]
+    reg = BotRegistry(None)
+    reg.add_order("bot-entry-1")                            # we placed it (e.g. before a crash)
+    run_loop(ex, registry=reg, own_p1=False)
+    assert len(stops(ex)) == 1 and reg.owns_position("p1")
+
+
+def test_only_our_stop_is_recognised_so_a_manual_stop_does_not_count_as_protection():
+    ex = FakeExchange()
+    ex.position = pos("LONG", 0.5, 100.0)
+    ex.orders = [{"clientOrderId": "manual-stop", "symbol": SYMBOL, "type": "STOP_MARKET", "stopPrice": 50.0}]
+    run_loop(ex)
+    assert len(stops(ex)) == 1                              # we still placed OUR stop
+    assert any(o["clientOrderId"] == "manual-stop" for o in ex.orders)   # and left theirs
+
+
+def test_no_new_entries_while_a_foreign_position_holds_the_symbol():
+    ex = FakeExchange()
+    ex.position = pos("SHORT", 1.0, 100.0)
+    strat = FakeStrategy()
+    strat.entry = EntryPlan(100.0, 98.0, 106.0, True, "LONG")
+    run_loop(ex, strat, own_p1=False)
+    assert [p for p in ex.placed if p["reduceOnly"] is False] == []
+
+
+def test_registry_persists_across_restarts(tmp_path):
+    path = str(tmp_path / "state.json")
+    r = BotRegistry(path)
+    r.add_order("o1"); r.add_position("p9")
+    r2 = BotRegistry(path)
+    assert r2.owns_order("o1") and r2.owns_position("p9") and not r2.owns_order("other")
+    assert not BotRegistry(str(tmp_path / "missing.json")).owns_order("o1")
+    (tmp_path / "bad.json").write_text("{not json")
+    assert not BotRegistry(str(tmp_path / "bad.json")).owns_order("o1")   # unreadable -> trust nothing
+
+
+def test_executor_registers_every_order_it_places():
+    ex = FakeExchange()
+    reg = BotRegistry(None)
+    exe = OrderExecutor(ex, SYMBOL, False, registry=reg)
+    r1 = exe.place_limit_order("BUY", 0.5, 99.0, reduce_only=False)
+    r2 = exe.place_stop_market("SELL", 0.5, 95.0)
+    assert reg.owns_order(r1["clientOrderId"]) and reg.owns_order(r2["clientOrderId"])
+
+
+# ---- the trade log carries every cost ----
+
+def test_tracker_splits_fees_discount_and_funding_into_columns(tmp_path):
+    import csv
+    from shark.performance import PerformanceTracker
+    path = str(tmp_path / "t.csv")
+    t = PerformanceTracker(path, 5000.0, SYMBOL)
+    t.record(105.07, 107.0, 0.24, "sar_flip", 47.26, 2.52, discount=0.25, funding=-0.59,
+             extra={"side": "LONG", "source": "settled", "entry_role": "TAKER", "exit_role": "TAKER",
+                    "position_id": "p1"})
+    row = list(csv.DictReader(open(path)))[0]
+    assert float(row["net_pnl"]) == pytest.approx(47.26 - 2.52 + 0.25 - 0.59)
+    assert (row["fees"], row["fee_discount"], row["funding"]) == ("2.52", "0.25", "-0.59")
+    assert row["source"] == "settled" and row["side"] == "LONG" and row["position_id"] == "p1"
+    assert t.equity == pytest.approx(5000 + 44.40)
+
+
+def test_tracker_upgrades_an_older_csv_without_losing_rows(tmp_path):
+    import csv
+    from shark.performance import PerformanceTracker
+    path = tmp_path / "old.csv"
+    path.write_text("timestamp,symbol,entry_price,exit_price,qty,exit_reason,gross_pnl,fees,net_pnl,equity_after\n"
+                    "2026-10-01T10:00:00,SOLUSDT,100,101,1,tp,1.0,0.1,0.9,5000.9\n")
+    PerformanceTracker(str(path), 5000.0, SYMBOL)
+    rows = list(csv.DictReader(open(path)))
+    assert PerformanceTracker.COLUMNS == list(rows[0].keys())
+    assert rows[0]["exit_reason"] == "tp" and rows[0]["net_pnl"] == "0.9" and rows[0]["fee_discount"] == ""

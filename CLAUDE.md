@@ -848,3 +848,18 @@ the ledger total to the paisa. Facts learned the hard way:
 - UNIT FIX: risk/tracker work in INR, but the engine used to feed them quote-currency (USDT) P&L and fees, which
   made the 3% daily-loss halt ~96x too loose on USDT pairs. `live_engine.run(..., quote_to_inr_rate=)` now
   converts estimates to INR (dry run too). The backtest engine has NOT been audited for the same thing.
+
+## Bot trades vs the owner's own trades (2026-10-20)
+
+The Shark account is shared with the owner's manual trading, so the bot must never touch what it didn't open.
+- `shark/bot_registry.py` remembers every order id the bot places (`OrderExecutor` records them; file
+  `bot_state_<symbol>.json`, gitignored). A position is the bot's only if one of its fills came from one of those
+  orders (`ExchangeSync.owns`). A foreign position on the symbol is never adopted, stopped, exited or booked,
+  new entries on that symbol are blocked while it is open, and the bot only ever cancels/recognises ITS OWN
+  resting orders (a manual stop order is left alone). Shark cannot tag positions, and two trades on one symbol
+  merge into one position - so the owner should trade other symbols by hand.
+- The trade CSV now has the full cost breakdown (`fees`, `fee_discount`, `funding`, `source`, `side`, roles,
+  `position_id`); `source` is settled / estimated / simulated. The dashboard filters by mode (real mode hides
+  simulated rows), shows each cost in its own column, and shows the bot's live position
+  (`/api/position`, `shark/position_view.py`: entry fee, funding so far, estimated exit fee, net if closed now).
+  `net_pnl = gross - fees + fee_discount + funding`. Old 10-column CSVs are upgraded in place.

@@ -9,3 +9,5 @@ credentials.json
 credentials.json.tmp
 local_settings.json
 local_settings.json.tmp
+bot_state_*.json
+.bot_state_*

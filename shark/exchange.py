@@ -246,7 +246,10 @@ class ExchangeClient:
                 raise ValueError(f"Unexpected positionType in position: {pos!r}")
             return {"side": side, "qty": qty, "entry_price": float(pos["entryPrice"]),
                     "position_id": pos.get("positionId"),
-                    "opened_at_ms": self._iso_to_ms(pos.get("createdAt", pos.get("createdTime")))}
+                    "opened_at_ms": self._iso_to_ms(pos.get("createdAt", pos.get("createdTime"))),
+                    "liquidation_price": pos.get("liquidationPrice"), "leverage": pos.get("leverage"),
+                    "margin_inr": pos.get("marginInMarginAsset"),
+                    "settlement_rate": pos.get("marginSettlementRate")}
         return None
 
     @staticmethod

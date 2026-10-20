@@ -138,19 +138,37 @@ def stop_bot() -> tuple[bool, str]:
     return True, "Stopped. Any open simulated position was discarded; closed trades are kept in the CSV."
 
 
-def read_trades() -> list[dict]:
+def _f(row, key) -> float:
+    try:
+        return float(row.get(key) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def read_trades(dry_run: bool | None = None) -> list[dict]:
+    """The BOT's closed trades (its own log - never the account owner's manual trades). `source` says how
+    each was booked: settled (Shark's real numbers), estimated, or simulated (dry run). Real mode shows only
+    real trades, dry-run mode only simulated ones, so the two never mix."""
     trades = []
     for path in sorted(ROOT.glob(f"{CSV_PREFIX}*.csv")):
         strategy = path.stem[len(CSV_PREFIX):]
         with open(path, newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
                 try:
+                    source = row.get("source") or ""
+                    if dry_run is True and source not in ("simulated", ""):
+                        continue
+                    if dry_run is False and source in ("simulated", ""):
+                        continue
                     trades.append({
                         "time": row["timestamp"], "strategy": strategy, "symbol": row["symbol"],
+                        "side": row.get("side") or "",
                         "entry": float(row["entry_price"]), "exit": float(row["exit_price"]),
                         "qty": float(row["qty"]), "reason": row["exit_reason"],
                         "gross": float(row["gross_pnl"]), "fees": float(row["fees"]),
-                        "net": float(row["net_pnl"]),
+                        "discount": _f(row, "fee_discount"), "funding": _f(row, "funding"),
+                        "net": float(row["net_pnl"]), "source": source or "legacy",
+                        "entry_role": row.get("entry_role") or "", "exit_role": row.get("exit_role") or "",
                     })
                 except (KeyError, ValueError):
                     continue
@@ -181,6 +199,9 @@ def compute_stats(trades: list[dict], start_capital: float) -> tuple[dict, list[
         "net_pct": net / start_capital * 100 if start_capital else 0.0,
         "gross": sum(t["gross"] for t in trades),
         "fees": sum(t["fees"] for t in trades),
+        "discounts": sum(t.get("discount", 0.0) for t in trades),
+        "funding": sum(t.get("funding", 0.0) for t in trades),
+        "estimated_trades": sum(1 for t in trades if t.get("source") == "estimated"),
         "trades": len(trades),
         "wins": len(wins),
         "losses": len(losses),
@@ -241,9 +262,37 @@ def fetch_balance() -> dict:
     return value
 
 
+_position_cache: dict = {"at": 0.0, "value": None}
+
+
+def fetch_bot_position() -> dict:
+    """The bot's own open position straight from the exchange, with entry fee, funding and the estimated
+    exit fee. Real mode only; never reveals the owner's manual positions."""
+    cfg = load_config()
+    if cfg.get("dry_run") is True:
+        return {"ok": True, "dry_run": True, "open": False}
+    if not (cfg["api_key"] and cfg["api_secret"]):
+        return {"ok": False, "error": "No API credentials saved."}
+    now = time.time()
+    if _position_cache["value"] is not None and now - _position_cache["at"] < 15:
+        return _position_cache["value"]
+    try:
+        from shark.bot_registry import BotRegistry
+        from shark.orders import effective_fee_pct
+        from shark.position_view import describe_open_position
+        client = ExchangeClient(cfg["base_url"], cfg["api_key"], cfg["api_secret"])
+        taker = effective_fee_pct(cfg["fees"]["taker_fee_pct"], cfg["fees"]["gst_pct"])
+        value = {"ok": True, **describe_open_position(
+            client, BotRegistry(str(ROOT / f"bot_state_{cfg['symbol']}.json")), cfg["symbol"], taker)}
+    except Exception as e:
+        value = {"ok": False, "error": str(e)[:300]}
+    _position_cache.update(at=now, value=value)
+    return value
+
+
 def build_state() -> dict:
     cfg = load_config()
-    trades = read_trades()
+    trades = read_trades(cfg.get("dry_run") is True)
     stats, curve = compute_stats(trades, float(cfg["account_capital"]))
     log_lines = read_log_tail()
     pids = find_bot_pids()
@@ -288,6 +337,11 @@ def index():
 @app.get("/api/balance")
 def balance():
     return fetch_balance()
+
+
+@app.get("/api/position")
+def bot_position():
+    return fetch_bot_position()
 
 
 @app.get("/api/state")
@@ -472,14 +526,14 @@ input[type=password],input[type=text]{width:100%;font:inherit;color:var(--ink);b
   <p class="msg" id="msg" role="status"></p>
 
   <section id="walletbox" hidden>
-    <h2>Exchange wallet (real funds, read from Shark Exchange)</h2>
+    <h2>Whole exchange account (real funds - includes any personal trades, not only the bot)</h2>
     <div class="kpis" id="wallet"></div>
     <p class="msg" id="walletmsg"></p>
   </section>
   <section class="kpis" id="kpis"></section>
 
   <section class="card">
-    <h2>Equity (simulated: starting capital + cumulative net P&amp;L)</h2>
+    <h2>Bot-only equity (starting capital + the bot's own net P&amp;L after every cost)</h2>
     <div class="chartbox" id="chartbox"></div>
   </section>
 
@@ -488,8 +542,10 @@ input[type=password],input[type=text]{width:100%;font:inherit;color:var(--ink);b
     <section class="card"><h2>Recent trades</h2><div class="tablewrap" id="trades"></div></section>
     <section class="card"><h2>Bot output</h2><pre id="log"></pre></section>
   </div>
-  <p class="foot">Balance here is calculated from the bot's trade log (starting capital + cumulative net P&amp;L), not read from your exchange wallet.
-  In dry-run mode Stop discards any open simulated position; in real-account mode Stop does not close a real position (closed trades stay in the CSV).
+  <p class="foot">Everything above the "whole exchange account" card is the <b>bot's own trades only</b>, read from its own trade log - your
+  personal trades are never listed and never touched. "settled" trades use Shark's real fills, fees (incl. GST), fee discounts and funding;
+  "estimated" ones are a fallback when Shark's data was incomplete. The whole-account card is the real wallet and includes everything.
+  In dry-run mode Stop discards any open simulated position; in real-account mode Stop does not close a real position.
   Switch between dry run and real account on the Settings page.</p>
 </div>
 
@@ -517,13 +573,17 @@ let state = null, busy = false;
 
 function renderKpis(s){
   const pf = s.profit_factor == null ? (s.wins > 0 ? "∞" : "—") : fmt(s.profit_factor);
+  const est = s.estimated_trades ? " · " + s.estimated_trades + " estimated" : "";
   const items = [
-    ["Bot equity (calculated)", fmt(s.equity) + " ₹", "start " + fmt(s.start_capital) + " ₹", ""],
-    ["Net P&L", signed(s.net) + " ₹", signed(s.net_pct) + "%  ·  today " + signed(s.today_net), cls(s.net)],
-    ["Win rate", s.win_rate == null ? "—" : fmt(s.win_rate,1) + "%", s.wins + "W / " + s.losses + "L", ""],
+    ["Bot-only equity", fmt(s.equity) + " ₹", "start " + fmt(s.start_capital) + " ₹ + bot net after all costs", ""],
+    ["Net P&L (after all costs)", signed(s.net) + " ₹", signed(s.net_pct) + "%  ·  today " + signed(s.today_net) + est, cls(s.net)],
+    ["Gross P&L", signed(s.gross) + " ₹", "price result, before any cost", cls(s.gross)],
+    ["Trading fees", "−" + fmt(s.fees) + " ₹", "incl. GST, as charged by Shark", s.fees > 0 ? "bad" : ""],
+    ["Fee discounts", "+" + fmt(s.discounts) + " ₹", "rebates credited by Shark", s.discounts > 0 ? "good" : ""],
+    ["Funding", signed(s.funding) + " ₹", "paid (−) / received (+) while holding", cls(s.funding)],
+    ["Win rate", s.win_rate == null ? "—" : fmt(s.win_rate,1) + "%", s.wins + "W / " + s.losses + "L · " + s.trades + " trades", ""],
     ["Profit factor", pf, "avg win " + signed(s.avg_win) + " / loss " + signed(s.avg_loss), ""],
-    ["Max drawdown", fmt(s.max_drawdown_pct) + "%", "fees paid " + fmt(s.fees) + " ₹", ""],
-    ["Trades", String(s.trades), "closed", ""],
+    ["Max drawdown", fmt(s.max_drawdown_pct) + "%", "of bot-only equity", ""],
   ];
   const root = $("kpis"); root.replaceChildren();
   for (const [l,v,sub,c] of items)
@@ -580,26 +640,58 @@ function renderChart(curve, start){
   box.append(svg, tip);
 }
 
+let botPos = null;
+function row(label, value, c){ return el("div",{class:"sub"}, label + ": ", el("b",{class:c||""}, value)); }
 function renderPosition(p){
   const box = $("position"); box.replaceChildren();
+  if (botPos && botPos.ok && botPos.open){
+    const b = botPos;
+    box.append(el("div",{}, el("b",{}, "Bot position: " + b.side + " " + fmt(b.qty,4) + " @ " + fmt(b.entry_price))));
+    box.append(row("Last price", fmt(b.last_price)));
+    box.append(row("Unrealised P&L", signed(b.unrealised_inr) + " ₹", cls(b.unrealised_inr)));
+    box.append(row("Entry fee paid", "−" + fmt(b.entry_fee_inr) + " ₹", "bad"));
+    if (b.entry_discount_inr) box.append(row("Fee discount", "+" + fmt(b.entry_discount_inr) + " ₹", "good"));
+    box.append(row("Funding so far", signed(b.funding_inr) + " ₹", cls(b.funding_inr)));
+    box.append(row("Exit fee (estimated)", "−" + fmt(b.est_exit_fee_inr) + " ₹", "bad"));
+    box.append(row("If closed now, net", signed(b.net_if_closed_now_inr) + " ₹", cls(b.net_if_closed_now_inr)));
+    box.append(row("Stop-loss on exchange", b.stop_on_exchange ? fmt(b.stop_price) : "NONE - check the log", b.stop_on_exchange ? "" : "bad"));
+    box.append(row("Liquidation", fmt(b.liquidation_price) + "  ·  margin " + fmt(b.margin_inr) + " ₹  ·  " + b.leverage + "x"));
+    return;
+  }
+  if (botPos && botPos.ok && botPos.foreign_open)
+    box.append(el("div",{class:"sub"},"A position is open on this symbol that the bot did not open (yours). The bot ignores it and will not trade this symbol until it is closed."));
   if (!p.status_line){ box.append(el("div",{class:"empty"},"No bot output yet.")); return; }
   box.append(el("div",{}, el("b",{}, p.side ? "In a " + p.side + " position" : "Flat (no open position)")));
   if (p.detail) box.append(el("div",{class:"sub"},p.detail));
   box.append(el("div",{class:"sub"},"Last status: " + p.status_line.trim()));
 }
 
+let lastPosAt = 0;
+async function refreshBotPosition(){
+  const live = state && !state.config.dry_run;
+  if (!live){ botPos = null; return; }
+  if (Date.now() - lastPosAt < 15000) return;
+  lastPosAt = Date.now();
+  try { botPos = await api("/api/position"); if (state) renderPosition(state.position); } catch(e){}
+}
+
 function renderTrades(trades){
   const box = $("trades"); box.replaceChildren();
-  if (!trades.length){ box.append(el("div",{class:"empty"},"No closed trades yet.")); return; }
-  const head = ["Closed","Strategy","Symbol","Entry","Exit","Qty","Exit reason","Fees","Net P&L"];
+  if (!trades.length){ box.append(el("div",{class:"empty"},"No closed bot trades yet (your personal trades are never shown here).")); return; }
+  const head = ["Closed","Side","Entry","Exit","Qty","Gross","Fees","Discount","Funding","Net","Reason","Source"];
   const tbl = el("table"), thead = el("thead"), hr = el("tr");
   head.forEach(h => hr.append(el("th",{},h))); thead.append(hr); tbl.append(thead);
   const tb = el("tbody");
   for (const t of trades){
     const tr = el("tr");
-    [t.time.replace("T"," "), t.strategy, t.symbol, fmt(t.entry), fmt(t.exit), fmt(t.qty,4), t.reason, fmt(t.fees)]
-      .forEach(v => tr.append(el("td",{},v)));
-    tr.append(el("td",{class:cls(t.net)}, signed(t.net)));
+    [t.time.replace("T"," "), t.side || "—", fmt(t.entry), fmt(t.exit), fmt(t.qty,4)].forEach(v => tr.append(el("td",{},v)));
+    tr.append(el("td",{class:cls(t.gross)}, signed(t.gross)));
+    tr.append(el("td",{class:t.fees>0?"bad":""}, t.fees ? "−" + fmt(t.fees) : "0.00"));
+    tr.append(el("td",{class:t.discount>0?"good":""}, t.discount ? "+" + fmt(t.discount) : "—"));
+    tr.append(el("td",{class:cls(t.funding)}, t.funding ? signed(t.funding) : "—"));
+    tr.append(el("td",{class:cls(t.net)}, el("b",{}, signed(t.net))));
+    tr.append(el("td",{}, t.reason));
+    tr.append(el("td",{title: t.entry_role ? "entry " + t.entry_role + " / exit " + t.exit_role : ""}, t.source));
     tb.append(tr);
   }
   tbl.append(tb); box.append(tbl);
@@ -623,6 +715,7 @@ function render(d){
   renderChart(d.curve, d.stats.start_capital);
   renderPosition(d.position);
   renderTrades(d.trades);
+  refreshBotPosition();
   const log = $("log"), atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
   log.textContent = d.log.length ? d.log.join("\n") : "No dashboard-started bot output yet.";
   if (atBottom) log.scrollTop = log.scrollHeight;

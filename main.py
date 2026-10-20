@@ -17,6 +17,7 @@ import signal
 import sys
 
 from shark.config import load_config, strategy_params
+from shark.bot_registry import BotRegistry
 from shark.exchange import ExchangeClient
 from shark.orders import OrderExecutor
 from shark.performance import PerformanceTracker
@@ -55,7 +56,9 @@ def cmd_backtest(args, config: dict):
 def cmd_run(args, config: dict):
     strategy = build_strategy(args.strategy, config)
     exchange = ExchangeClient(config["base_url"], config["api_key"], config["api_secret"])
-    executor = OrderExecutor(exchange, config["symbol"], config["dry_run"])
+    # Which exchange orders/positions are ours (survives restarts). Dry run places nothing, so memory-only.
+    registry = BotRegistry(None if config["dry_run"] else f"bot_state_{config['symbol']}.json")
+    executor = OrderExecutor(exchange, config["symbol"], config["dry_run"], registry=registry)
 
     info = exchange.get_exchange_info(config["symbol"])
     print(f"Exchange limits for {config['symbol']}: min_qty={info['min_qty']} "

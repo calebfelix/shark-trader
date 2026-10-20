@@ -14,11 +14,25 @@ def _is_stop(order: dict) -> bool:
 
 
 class ExchangeSync:
-    def __init__(self, exchange, executor, symbol: str, strategy: Strategy):
+    def __init__(self, exchange, executor, symbol: str, strategy: Strategy, registry):
         self.exchange = exchange
         self.executor = executor
         self.symbol = symbol
         self.strategy = strategy
+        self.registry = registry
+
+    def owns(self, ex_pos: dict) -> bool:
+        """Is this exchange position one WE opened? Yes if remembered, or if any fill that built it came
+        from an order id we placed. A manual (or any foreign) position is never ours."""
+        pid = ex_pos.get("position_id")
+        if self.registry.owns_position(pid):
+            return True
+        start = (ex_pos.get("opened_at_ms") or 0) - 60_000
+        for t in self.exchange.get_trade_history(self.symbol, start or None):
+            if t.get("positionId") == pid and self.registry.owns_order(t.get("clientOrderId")):
+                self.registry.add_position(pid)
+                return True
+        return False
 
     def position(self) -> dict | None:
         return self.exchange.get_open_position(self.symbol)
@@ -46,8 +60,13 @@ class ExchangeSync:
         return settle_position(self.exchange, self.symbol, position.position_id, position.side,
                                position.opened_at_ms)
 
+    def _ours(self) -> list[dict]:
+        """Resting orders on the symbol that WE placed - never the owner's manual orders."""
+        return [o for o in self.exchange.list_open_orders(self.symbol)
+                if self.registry.owns_order(o.get("clientOrderId"))]
+
     def _stops(self) -> list[dict]:
-        return [o for o in self.exchange.list_open_orders(self.symbol) if _is_stop(o)]
+        return [o for o in self._ours() if _is_stop(o)]
 
     def ensure_stop(self, position: Position) -> str | None:
         """Make sure exactly one resting stop exists. Returns a message if it acted."""
@@ -67,9 +86,9 @@ class ExchangeSync:
         return n
 
     def cancel_all_resting(self) -> int:
-        """Cancel every resting order on the symbol (used once a position is gone)."""
+        """Cancel every resting order WE placed on the symbol (used once a position is gone)."""
         n = 0
-        for o in self.exchange.list_open_orders(self.symbol):
+        for o in self._ours():
             if o.get("clientOrderId"):
                 self.exchange.cancel_order(o["clientOrderId"])
                 n += 1

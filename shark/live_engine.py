@@ -5,6 +5,7 @@ import time
 import requests
 
 from .exchange import ExchangeClient
+from .bot_registry import BotRegistry
 from .live_sync import ExchangeSync, Pending
 from .orders import OrderExecutor, effective_fee_pct, fee_gate_passes, round_trip_fee_estimate
 from .performance import PerformanceTracker
@@ -29,7 +30,10 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
     print(f"Maker fee (eff.): {maker_fee_pct:.4f}% | Taker fee (eff.): {taker_fee_pct:.4f}%")
 
     real = not dry_run
-    sync = ExchangeSync(exchange, executor, symbol, strategy) if real else None
+    registry = getattr(executor, "registry", None) or BotRegistry(None)
+    executor.registry = registry
+    sync = ExchangeSync(exchange, executor, symbol, strategy, registry) if real else None
+    foreign_warned: set = set()
     order_timeout = config.get("order_timeout_seconds", 180)
     pending_entry: Pending | None = None
     pending_exit: Pending | None = None
@@ -50,9 +54,11 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
         gross_pnl *= quote_to_inr_rate
         fees *= quote_to_inr_rate
         risk.record_trade_result(gross_pnl, fees)
-        tracker.record(position.entry_price, exit_price, position.qty, reason, gross_pnl, fees)
+        tracker.record(position.entry_price, exit_price, position.qty, reason, gross_pnl, fees,
+                       extra={"side": position.side, "source": "simulated" if dry_run else "estimated",
+                              "position_id": position.position_id or ""})
 
-    def book_settled(reason, s):
+    def book_settled(position, reason, s):
         """Book a closed trade from Shark's own numbers (INR): nothing estimated."""
         costs = s["fees_inr"] - s["discounts_inr"] - s["funding_inr"]   # funding is signed: paid < 0
         print(f"    Settled from exchange: realized {s['realized_inr']:+.2f} | fees -{s['fees_inr']:.2f} "
@@ -60,7 +66,10 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
               f"=> NET {s['net_inr']:+.2f} INR  (entry {s['entry_role']}, exit {s['exit_role']}, "
               f"exit @ {s['exit_price']:.2f})")
         risk.record_trade_result(s["realized_inr"], costs)
-        tracker.record(s["entry_price"], s["exit_price"], s["qty"], reason, s["realized_inr"], costs)
+        tracker.record(s["entry_price"], s["exit_price"], s["qty"], reason, s["realized_inr"], s["fees_inr"],
+                       discount=s["discounts_inr"], funding=s["funding_inr"],
+                       extra={"side": position.side, "source": "settled", "entry_role": s["entry_role"],
+                              "exit_role": s["exit_role"], "position_id": position.position_id or ""})
 
     position: Position | None = None
     bars_since_open = 0
@@ -80,7 +89,14 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                   f"position={position.side if position else 'None'}")
 
             if real:
-                ex_pos = sync.position()  # raises on API trouble -> skip this iteration
+                raw_pos = sync.position()  # raises on API trouble -> skip this iteration
+                ex_pos = raw_pos if (raw_pos is not None and sync.owns(raw_pos)) else None
+                foreign = raw_pos if (raw_pos is not None and ex_pos is None) else None
+                if foreign is not None and foreign["position_id"] not in foreign_warned:
+                    foreign_warned.add(foreign["position_id"])
+                    print(f"    NOTE: an open {symbol} position ({foreign['side']} {foreign['qty']} @ "
+                          f"{foreign['entry_price']}) was NOT opened by this bot - hands off: not managing it, "
+                          f"not placing a stop on it, and not opening new trades on {symbol} while it is open.")
                 if position is None and ex_pos is not None:
                     plan = pending_entry.info.get("plan") if pending_entry else None
                     position = sync.adopt(ex_pos, plan)
@@ -96,7 +112,7 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                     print(f"    Position is closed on the exchange ({reason}) - settling from Shark's records")
                     settled = sync.settle(position)
                     if settled:
-                        book_settled(reason, settled)
+                        book_settled(position, reason, settled)
                     else:
                         print("    WARNING: Shark's trade history is incomplete - booking an ESTIMATE instead "
                               "(check the Shark app for the real result)")
@@ -156,7 +172,7 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                             position = None
                             bars_since_open = 0
             else:
-                plan = None if (real and pending_entry is not None) \
+                plan = None if (real and (pending_entry is not None or foreign is not None)) \
                     else strategy.entry_plan(price, candles[-1], indicators)
                 if plan is not None:
                     if not risk.can_open_new_trade():
@@ -199,7 +215,7 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                                 pending_entry = Pending((resp or {}).get("clientOrderId"), plan=plan, qty=qty)
                                 time.sleep(2)  # a market order fills at once - confirm without waiting a full poll
                                 ex_pos = sync.position()
-                                if ex_pos is not None:
+                                if ex_pos is not None and sync.owns(ex_pos):
                                     position = sync.adopt(ex_pos, plan)
                                     pending_entry = None
                                     bars_since_open = 0
