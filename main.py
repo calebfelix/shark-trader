@@ -10,6 +10,7 @@ All tunable settings live in config.json - no code edits needed to
 change symbol, risk %, or strategy parameters. See README.md.
 """
 
+import requests
 import argparse
 import atexit
 import signal
@@ -96,8 +97,16 @@ def cmd_run(args, config: dict):
         print(f"[DRY RUN] Would set leverage={lev_cfg['value']}x marginMode={lev_cfg['margin_mode']} "
               f"for {config['symbol']}")
     else:
-        exchange.set_leverage(config["symbol"], lev_cfg["value"], lev_cfg["margin_mode"])
-        print(f"Set leverage={lev_cfg['value']}x marginMode={lev_cfg['margin_mode']} for {config['symbol']}")
+        try:
+            exchange.set_leverage(config["symbol"], lev_cfg["value"], lev_cfg["margin_mode"])
+            print(f"Set leverage={lev_cfg['value']}x marginMode={lev_cfg['margin_mode']} for {config['symbol']}")
+        except requests.exceptions.HTTPError as e:
+            # Shark rejects update/preference on some accounts (error 2314, see CLAUDE.md);
+            # orders still work with the leverage already set in the Shark app.
+            print(f"WARNING: could not set leverage via API ({e}). Continuing with the leverage "
+                  f"already set on the account - make sure it is {lev_cfg['value']}x "
+                  f"{lev_cfg['margin_mode']} for {config['symbol']} in the Shark app, "
+                  f"since position sizing assumes it.")
 
     risk = RiskManager(
         account_capital=config["account_capital"],
