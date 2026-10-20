@@ -813,3 +813,20 @@ rejected and why:
   Shark Exchange has no options market, so there's no instrument to
   construct this trade with at all; every load-bearing piece is
   options/margin-specific.
+
+## Real-mode reconciliation (2026-10-20)
+
+`live_engine.run()` in real-account mode (`dry_run` false) treats the exchange's open position
+(`ExchangeClient.get_open_position`, `GET /v1/positions/OPEN`) as the source of truth, via
+`shark/live_sync.py`. Dry run keeps the old purely-simulated path - don't merge the two.
+- An entry order is only a `Pending` until a position shows up; unfilled after
+  `order_timeout_seconds` (config, default 180) it is cancelled. Exits likewise: a limit exit that
+  doesn't fill escalates to MARKET. Trades are booked only once the exchange shows the position gone
+  (reason `closed_on_exchange` if the exchange's own stop/TP closed it; P&L is still an estimate).
+- A restart adopts an open position (SL/TP recomputed from the strategy's `stop_loss_pct`/`take_profit_pct`).
+- A reduce-only `STOP_MARKET` at the hard `stop_loss_pct` rests on the exchange (`OrderExecutor.place_stop_market`);
+  a strategy exit cancels it first. It is NOT trailed with SAR.
+- A positions API error skips the iteration - never treated as "flat".
+- Tests (`tests/test_live_reconcile.py`) use a fake exchange. The STOP_MARKET request shape and the
+  positions/open-orders field names come from docs.sharkexchange.in and have NOT been verified against a
+  live fill - verify with a tiny position before trusting it.

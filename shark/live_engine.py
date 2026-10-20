@@ -5,6 +5,7 @@ import time
 import requests
 
 from .exchange import ExchangeClient
+from .live_sync import ExchangeSync, Pending
 from .orders import OrderExecutor, effective_fee_pct, fee_gate_passes, round_trip_fee_estimate
 from .performance import PerformanceTracker
 from .risk import RiskManager
@@ -26,6 +27,27 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
     print(f"Capital: {config['account_capital']} INR | Risk/trade: {config['risk_per_trade_pct']}%")
     print(f"Maker fee (eff.): {maker_fee_pct:.4f}% | Taker fee (eff.): {taker_fee_pct:.4f}%")
 
+    real = not dry_run
+    sync = ExchangeSync(exchange, executor, symbol, strategy) if real else None
+    order_timeout = config.get("order_timeout_seconds", 180)
+    pending_entry: Pending | None = None
+    pending_exit: Pending | None = None
+    if real:
+        print("Real-account mode: the exchange's open position is the source of truth "
+              f"(reconciled every {poll_seconds}s); a hard stop-loss rests on the exchange.")
+
+    def close_out(position, reason, exit_price, exit_is_maker):
+        """Book a closed trade (shared by the dry-run and reconciled paths)."""
+        if position.side == "LONG":
+            gross_pnl = (exit_price - position.entry_price) * position.qty
+        else:
+            gross_pnl = (position.entry_price - exit_price) * position.qty
+        fee_pct = round_trip_fee_estimate(maker_fee_pct, taker_fee_pct,
+                                           position.entry_is_maker, exit_is_maker)
+        fees = position.entry_notional * fee_pct / 100
+        risk.record_trade_result(gross_pnl, fees)
+        tracker.record(position.entry_price, exit_price, position.qty, reason, gross_pnl, fees)
+
     position: Position | None = None
     bars_since_open = 0
     limit = max(strategy.min_candles_needed() + 10, 30)
@@ -43,31 +65,79 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
             print(f"{strategy.status_line(price, indicators)} "
                   f"position={position.side if position else 'None'}")
 
+            if real:
+                ex_pos = sync.position()  # raises on API trouble -> skip this iteration
+                if position is None and ex_pos is not None:
+                    plan = pending_entry.info.get("plan") if pending_entry else None
+                    position = sync.adopt(ex_pos, plan)
+                    pending_entry = None
+                    bars_since_open = 0
+                    print(f"    Confirmed on exchange: {position.side} {position.qty} @ {position.entry_price:.2f} "
+                          f"SL={position.stop_loss_price:.2f} TP={position.take_profit_price:.2f}"
+                          f"{'' if plan else ' (adopted: SL/TP recomputed from config)'}")
+                elif position is not None and ex_pos is None:
+                    reason = pending_exit.info["reason"] if pending_exit else "closed_on_exchange"
+                    exit_price = pending_exit.info["price"] if pending_exit else price
+                    exit_is_maker = pending_exit.info["maker"] if pending_exit else False
+                    print(f"    Position is closed on the exchange ({reason}) - booking trade at ~{exit_price:.2f}")
+                    close_out(position, reason, exit_price, exit_is_maker)
+                    sync.cancel_all_resting()
+                    position, pending_exit, bars_since_open = None, None, 0
+                elif position is not None and abs(ex_pos["qty"] - position.qty) > 1e-9:
+                    print(f"    Exchange size {ex_pos['qty']} differs from tracked {position.qty} - using exchange size")
+                    position.qty = ex_pos["qty"]
+                    position.entry_notional = position.entry_price * position.qty
+                    sync.cancel_stops()  # re-placed below at the right size
+
+                if pending_entry is not None and position is None and pending_entry.age() > order_timeout:
+                    print(f"    Entry order not filled after {order_timeout}s - cancelling it")
+                    if pending_entry.client_order_id:
+                        exchange.cancel_order(pending_entry.client_order_id)
+                    else:
+                        sync.cancel_all_resting()
+                    pending_entry = None  # a fill that raced the cancel is adopted next loop
+
+                if position is not None and pending_exit is None:
+                    try:
+                        msg = sync.ensure_stop(position)
+                        if msg:
+                            print(f"    {msg}")
+                    except Exception as e:
+                        print(f"WARNING: position has NO exchange stop-loss ({e}) - retrying next loop")
+
+                if pending_exit is not None and position is not None and pending_exit.age() > order_timeout:
+                    print(f"    Exit order not filled after {order_timeout}s - escalating to MARKET")
+                    sync.cancel_all_resting()
+                    executor.place_market_order("SELL" if position.side == "LONG" else "BUY",
+                                                position.qty, reduce_only=True)
+                    pending_exit = Pending(None, reason=pending_exit.info["reason"], price=price, maker=False)
+
             if position is not None:
                 decision = strategy.exit_decision(position, candles[-1], indicators, bars_since_open)
                 if decision is not None:
                     reason, exit_price, exit_is_maker = decision
                     close_side = "SELL" if position.side == "LONG" else "BUY"
-                    if exit_is_maker:
-                        print(f">>> Exit ({reason}) at {exit_price:.2f} via LIMIT (maker)")
-                        executor.place_limit_order(close_side, position.qty, exit_price, reduce_only=True)
+                    if real and pending_exit is not None:
+                        pass  # an exit is already working; reconciliation books it when it fills
                     else:
-                        print(f">>> Exit ({reason}) at {exit_price:.2f} via MARKET (taker)")
-                        executor.place_market_order(close_side, position.qty, reduce_only=True)
-
-                    if position.side == "LONG":
-                        gross_pnl = (exit_price - position.entry_price) * position.qty
-                    else:
-                        gross_pnl = (position.entry_price - exit_price) * position.qty
-                    fee_pct = round_trip_fee_estimate(maker_fee_pct, taker_fee_pct,
-                                                       position.entry_is_maker, exit_is_maker)
-                    fees = position.entry_notional * fee_pct / 100
-                    risk.record_trade_result(gross_pnl, fees)
-                    tracker.record(position.entry_price, exit_price, position.qty, reason, gross_pnl, fees)
-                    position = None
-                    bars_since_open = 0
+                        if real:
+                            sync.cancel_stops()  # the exit order replaces the resting stop
+                        if exit_is_maker:
+                            print(f">>> Exit ({reason}) at {exit_price:.2f} via LIMIT (maker)")
+                            resp = executor.place_limit_order(close_side, position.qty, exit_price, reduce_only=True)
+                        else:
+                            print(f">>> Exit ({reason}) at {exit_price:.2f} via MARKET (taker)")
+                            resp = executor.place_market_order(close_side, position.qty, reduce_only=True)
+                        if real:
+                            pending_exit = Pending((resp or {}).get("clientOrderId"), reason=reason,
+                                                   price=exit_price, maker=exit_is_maker)
+                        else:
+                            close_out(position, reason, exit_price, exit_is_maker)
+                            position = None
+                            bars_since_open = 0
             else:
-                plan = strategy.entry_plan(price, candles[-1], indicators)
+                plan = None if (real and pending_entry is not None) \
+                    else strategy.entry_plan(price, candles[-1], indicators)
                 if plan is not None:
                     if not risk.can_open_new_trade():
                         print("Signal found, but risk limits block new trades right now.")
@@ -101,20 +171,36 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                             print(f">>> Entry signal ({plan.side}) -> {open_side} {qty:.6f} {symbol} "
                                   f"via {side_desc} @ {plan.entry_price:.2f}")
                             if plan.is_maker:
-                                executor.place_limit_order(open_side, qty, plan.entry_price, reduce_only=False)
+                                resp = executor.place_limit_order(open_side, qty, plan.entry_price, reduce_only=False)
                             else:
-                                executor.place_market_order(open_side, qty, reduce_only=False)
-                            position = Position(
-                                entry_price=plan.entry_price, qty=qty,
-                                entry_notional=plan.entry_price * qty,
-                                stop_loss_price=plan.stop_loss_price,
-                                take_profit_price=plan.take_profit_price,
-                                entry_is_maker=plan.is_maker,
-                                side=plan.side,
-                            )
-                            bars_since_open = 0
-                            print(f"    entry={position.entry_price:.2f} SL={position.stop_loss_price:.2f} "
-                                  f"TP={position.take_profit_price:.2f}")
+                                resp = executor.place_market_order(open_side, qty, reduce_only=False)
+                            if real:
+                                # Not a position until the exchange shows one.
+                                pending_entry = Pending((resp or {}).get("clientOrderId"), plan=plan, qty=qty)
+                                time.sleep(2)  # a market order fills at once - confirm without waiting a full poll
+                                ex_pos = sync.position()
+                                if ex_pos is not None:
+                                    position = sync.adopt(ex_pos, plan)
+                                    pending_entry = None
+                                    bars_since_open = 0
+                                    print(f"    Confirmed on exchange: {position.side} {position.qty} @ "
+                                          f"{position.entry_price:.2f} SL={position.stop_loss_price:.2f} "
+                                          f"TP={position.take_profit_price:.2f}")
+                                else:
+                                    print(f"    Order {pending_entry.client_order_id} resting, not filled yet "
+                                          f"(will cancel after {order_timeout}s)")
+                            else:
+                                position = Position(
+                                    entry_price=plan.entry_price, qty=qty,
+                                    entry_notional=plan.entry_price * qty,
+                                    stop_loss_price=plan.stop_loss_price,
+                                    take_profit_price=plan.take_profit_price,
+                                    entry_is_maker=plan.is_maker,
+                                    side=plan.side,
+                                )
+                                bars_since_open = 0
+                                print(f"    entry={position.entry_price:.2f} SL={position.stop_loss_price:.2f} "
+                                      f"TP={position.take_profit_price:.2f}")
 
             strategy.note_indicators(indicators)
 

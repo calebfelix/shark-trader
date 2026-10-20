@@ -76,3 +76,24 @@ class OrderExecutor:
                   f"{self.symbol} reduceOnly={reduce_only} (TAKER fee, immediate exit)")
             return {"dry_run": True, **params}
         return self.exchange.signed_post("/v1/order/place-order", params)
+
+    def place_stop_market(self, side: str, quantity: float, stop_price: float) -> dict:
+        """Reduce-only STOP_MARKET resting on the exchange: closes (never flips)
+        the position if price reaches stop_price, even when this bot is down.
+        Request shape from docs.sharkexchange.in (stopPrice is required for
+        STOP_MARKET); not yet exercised against the live endpoint."""
+        params = {
+            "placeType": "ORDER_FORM",
+            "quantity": round(quantity, 6),
+            "side": side,
+            "symbol": self.symbol,
+            "type": "STOP_MARKET",
+            "stopPrice": round(stop_price, 2),
+            "reduceOnly": True,
+            "marginAsset": "INR",
+        }
+        if self.dry_run:
+            print(f"[DRY RUN] Would place {side} STOP_MARKET for {params['quantity']} "
+                  f"{self.symbol} stopPrice={params['stopPrice']} reduceOnly=True")
+            return {"dry_run": True, **params}
+        return self.exchange.signed_post("/v1/order/place-order", params)

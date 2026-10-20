@@ -215,3 +215,39 @@ class ExchangeClient:
         before placing orders that rely on this leverage. See CLAUDE.md."""
         params = {"leverage": leverage, "marginMode": margin_mode, "contractName": symbol}
         return self.signed_post("/v1/exchange/update/preference", params)
+
+    @staticmethod
+    def _as_list(resp) -> list:
+        """Shark returns a bare list for positions/open-orders, but tolerate a {"data": [...]} wrapper."""
+        if isinstance(resp, list):
+            return resp
+        if isinstance(resp, dict):
+            for key in ("data", "orders", "positions"):
+                if isinstance(resp.get(key), list):
+                    return resp[key]
+        return []
+
+    def get_open_position(self, symbol: str) -> dict | None:
+        """The open position on `symbol`, normalised to
+        {side, qty, entry_price, position_id}, or None when flat. Raises on any
+        API/shape problem so callers never mistake an error for 'flat'.
+        Field names (contractPair, positionType, positionAmount/quantity,
+        entryPrice, positionId) are from docs.sharkexchange.in."""
+        for pos in self._as_list(self.get_positions("OPEN", symbol)):
+            if pos.get("contractPair", pos.get("symbol")) != symbol:
+                continue
+            if str(pos.get("positionStatus", "OPEN")).upper() != "OPEN":
+                continue
+            qty = abs(float(pos.get("positionAmount", pos.get("quantity", 0)) or 0))
+            if qty <= 0:
+                continue
+            side = str(pos.get("positionType", "")).upper()
+            if side not in ("LONG", "SHORT"):
+                raise ValueError(f"Unexpected positionType in position: {pos!r}")
+            return {"side": side, "qty": qty, "entry_price": float(pos["entryPrice"]),
+                    "position_id": pos.get("positionId")}
+        return None
+
+    def list_open_orders(self, symbol: str) -> list[dict]:
+        return [o for o in self._as_list(self.get_open_orders(symbol))
+                if o.get("symbol", symbol) == symbol]
