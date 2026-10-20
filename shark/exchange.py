@@ -245,8 +245,33 @@ class ExchangeClient:
             if side not in ("LONG", "SHORT"):
                 raise ValueError(f"Unexpected positionType in position: {pos!r}")
             return {"side": side, "qty": qty, "entry_price": float(pos["entryPrice"]),
-                    "position_id": pos.get("positionId")}
+                    "position_id": pos.get("positionId"),
+                    "opened_at_ms": self._iso_to_ms(pos.get("createdAt", pos.get("createdTime")))}
         return None
+
+    @staticmethod
+    def _iso_to_ms(value) -> int | None:
+        if not value:
+            return None
+        from datetime import datetime
+        return int(datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp() * 1000)
+
+    def get_trade_history(self, symbol: str, start_ms: int | None = None, page_size: int = 200) -> list[dict]:
+        """GET /v1/user-data/trade-history: one row per fill with the real fee
+        (fee in quote asset, feeInMarginAsset in INR incl. GST) and realizedProfit.
+        Needs lowercase sortOrder and an epoch-ms startTimestamp (ISO gives 403)."""
+        params = {"symbol": symbol, "pageSize": page_size, "sortOrder": "asc"}
+        if start_ms:
+            params["startTimestamp"] = int(start_ms)
+        return self._as_list(self.signed_get("/v1/user-data/trade-history", params))
+
+    def get_transaction_history(self, symbol: str, start_ms: int | None = None, page_size: int = 200) -> list[dict]:
+        """GET /v1/user-data/transaction-history: the ledger (COMMISSION, GST_ON_COMMISSION,
+        FEE_DISCOUNT, FUNDING_FEE, GST_ON_FUNDING_FEE, REALIZED_PNL ...), amounts signed, in INR."""
+        params = {"symbol": symbol, "pageSize": page_size, "sortOrder": "asc"}
+        if start_ms:
+            params["startTimestamp"] = int(start_ms)
+        return self._as_list(self.signed_get("/v1/user-data/transaction-history", params))
 
     def list_open_orders(self, symbol: str) -> list[dict]:
         return [o for o in self._as_list(self.get_open_orders(symbol))

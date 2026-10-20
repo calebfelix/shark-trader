@@ -30,6 +30,8 @@ class FakeExchange(ExchangeClient):
         self.max_iterations = 3
         self.on_iteration = None      # callable(fake, iteration) to mutate state between loops
         self._n = 0
+        self.trade_history = []       # rows in Shark's trade-history shape
+        self.ledger = []              # rows in Shark's transaction-history shape
 
     def get_klines(self, symbol, interval, limit=100):
         self.iterations += 1
@@ -46,6 +48,10 @@ class FakeExchange(ExchangeClient):
             return [self.position] if self.position else []
         if endpoint == "/v1/order/open-orders":
             return list(self.orders)
+        if endpoint == "/v1/user-data/trade-history":
+            return list(self.trade_history)
+        if endpoint == "/v1/user-data/transaction-history":
+            return list(self.ledger)
         raise AssertionError(endpoint)
 
     def signed_post(self, endpoint, params):
@@ -72,7 +78,8 @@ class FakeExchange(ExchangeClient):
 
 def pos(side, qty, entry):
     return {"contractPair": SYMBOL, "positionType": side, "positionAmount": qty,
-            "quantity": qty, "entryPrice": entry, "positionStatus": "OPEN", "positionId": "p1"}
+            "quantity": qty, "entryPrice": entry, "positionStatus": "OPEN", "positionId": "p1",
+            "createdAt": "2026-10-20T13:58:56.942Z"}
 
 
 class FakeStrategy(Strategy):
@@ -113,13 +120,13 @@ def no_sleep(monkeypatch):
     monkeypatch.setattr(live_engine.time, "sleep", lambda s: None)
 
 
-def run_loop(ex, strategy=None, config=None, risk=None, tracker=None):
+def run_loop(ex, strategy=None, config=None, risk=None, tracker=None, quote_to_inr_rate=1.0):
     strategy = strategy or FakeStrategy()
     risk, tracker = risk or FakeRisk(), tracker or FakeTracker()
     cfg = dict(CONFIG, **(config or {}))
     executor = OrderExecutor(ex, SYMBOL, cfg["dry_run"])
     try:
-        live_engine.run(strategy, ex, executor, risk, tracker, cfg)
+        live_engine.run(strategy, ex, executor, risk, tracker, cfg, quote_to_inr_rate=quote_to_inr_rate)
     except Stop:
         pass
     return strategy, risk, tracker
@@ -191,7 +198,7 @@ def test_stop_hit_on_exchange_is_booked_and_orders_cleaned_up():
             f.position = None
     ex.on_iteration = gone
     _, risk, tracker = run_loop(ex)
-    assert [t[0] for t in tracker.trades] == ["closed_on_exchange"]
+    assert [t[0] for t in tracker.trades] == ["closed_on_exchange_estimated"]   # no history -> estimate, flagged
     assert len(risk.results) == 1
     assert ex.orders == []                            # leftover stop cancelled
 
@@ -210,7 +217,7 @@ def test_strategy_exit_cancels_stop_and_books_only_after_exchange_confirms():
     exits = [p for p in ex.placed if p["reduceOnly"] is True and p["type"] == "MARKET"]
     assert len(exits) == 1 and exits[0]["side"] == "SELL"
     assert any(c.startswith("cid") for c in ex.cancelled)          # resting stop cancelled first
-    assert [t[0] for t in tracker.trades] == ["sar_flip"]         # booked once, with our reason
+    assert [t[0] for t in tracker.trades] == ["sar_flip_estimated"]   # booked once, with our reason
     assert len(risk.results) == 1
 
 
@@ -259,7 +266,8 @@ class TestExchangeReaders:
         ex = FakeExchange()
         ex.position = pos("SHORT", -0.25, 99.5)
         got = ex.get_open_position(SYMBOL)
-        assert got == {"side": "SHORT", "qty": 0.25, "entry_price": 99.5, "position_id": "p1"}
+        assert got == {"side": "SHORT", "qty": 0.25, "entry_price": 99.5, "position_id": "p1",
+                       "opened_at_ms": 1792504736942}
 
     def test_other_symbols_ignored_and_bad_side_raises(self):
         ex = FakeExchange()
@@ -268,3 +276,100 @@ class TestExchangeReaders:
         ex.position = dict(pos("LONG", 1, 1), positionType="WAT")
         with pytest.raises(ValueError):
             ex.get_open_position(SYMBOL)
+
+
+# ---- settlement from Shark's own records (shapes copied from real responses, 2026-10-20) ----
+
+def _trade(id_, time_, side, price, qty, fee_inr, realized_inr=None, role="TAKER", position_id="p1"):
+    return {"id": id_, "time": time_, "symbol": SYMBOL, "type": "LIMIT", "side": side, "price": price,
+            "quantity": qty, "role": role, "fee": 0.0, "feeInMarginAsset": fee_inr,
+            "realizedProfit": 0, "realizedProfitInMarginAsset": realized_inr, "positionId": position_id}
+
+
+def _ledger(time_, type_, amount, trade_id=None):
+    return {"id": 1, "time": time_, "type": type_, "amount": amount, "asset": "INR",
+            "symbol": SYMBOL, "tradeId": trade_id}
+
+
+def settled_exchange():
+    """LONG 0.24 opened 13:58:56.9, closed next day 09:00. Real shapes, incl. discount rows that have no tradeId."""
+    ex = FakeExchange()
+    ex.trade_history = [
+        _trade(1, "2026-10-20T13:58:56.927Z", "BUY", 105.07, 0.24, 1.22),
+        _trade(2, "2026-10-21T09:00:00.000Z", "SELL", 107.00, 0.24, 1.30, realized_inr=47.26),
+        _trade(9, "2026-10-21T09:00:00.000Z", "SELL", 1.0, 1.0, 99.0, realized_inr=999.0, position_id="other"),
+    ]
+    ex.ledger = [
+        _ledger("2026-10-20T13:58:56.927Z", "COMMISSION", -1.03, 1),
+        _ledger("2026-10-20T13:58:57.000Z", "FEE_DISCOUNT", 0.12),          # follows trade 1 by ~70ms
+        _ledger("2026-10-21T00:00:00.700Z", "FUNDING_FEE", -0.50),
+        _ledger("2026-10-21T00:00:00.700Z", "GST_ON_FUNDING_FEE", -0.09),
+        _ledger("2026-10-21T09:00:00.070Z", "FEE_DISCOUNT", 0.13),          # follows trade 2
+        _ledger("2026-10-22T00:00:00.700Z", "FUNDING_FEE", -7.00),          # after close: not ours
+        _ledger("2026-10-19T00:00:00.700Z", "FUNDING_FEE", -7.00),          # before open: not ours
+        _ledger("2026-10-20T20:00:00.000Z", "FEE_DISCOUNT", 5.00),          # unrelated discount: not ours
+    ]
+    return ex
+
+
+def test_settle_position_adds_up_fees_discounts_and_funding():
+    from shark.settlement import settle_position
+    s = settle_position(settled_exchange(), SYMBOL, "p1", "LONG", 1792504736942)
+    assert s["realized_inr"] == pytest.approx(47.26)
+    assert s["fees_inr"] == pytest.approx(2.52)               # 1.22 + 1.30 (GST already included)
+    assert s["discounts_inr"] == pytest.approx(0.25)          # only the two discounts that follow our fills
+    assert s["funding_inr"] == pytest.approx(-0.59)           # only funding while the position was open
+    assert s["net_inr"] == pytest.approx(47.26 - 2.52 + 0.25 - 0.59)
+    assert (s["entry_price"], s["exit_price"], s["qty"]) == pytest.approx((105.07, 107.0, 0.24))
+
+
+def test_settle_position_returns_none_until_the_close_is_complete():
+    from shark.settlement import settle_position
+    ex = settled_exchange()
+    ex.trade_history = ex.trade_history[:1]                   # exit fill not visible yet
+    assert settle_position(ex, SYMBOL, "p1", "LONG", 1792504736942, retries=2, wait_seconds=0) is None
+    ex.trade_history = [ex.trade_history[0], dict(_trade(2, "2026-10-21T09:00:00.000Z", "SELL", 107.0, 0.10, 1.0))]
+    assert settle_position(ex, SYMBOL, "p1", "LONG", 1792504736942, retries=1, wait_seconds=0) is None  # partial close
+
+
+def test_engine_books_the_exchanges_real_numbers_in_inr():
+    ex = settled_exchange()
+    ex.position = pos("LONG", 0.24, 105.07)
+    ex.max_iterations = 4
+    ex.on_iteration = lambda f, i: setattr(f, "position", None) if i == 3 else None
+    _, risk, tracker = run_loop(ex, quote_to_inr_rate=96.0)
+    assert len(tracker.trades) == 1
+    reason, entry, exit_, qty = tracker.trades[0]
+    assert reason == "closed_on_exchange"                      # not "_estimated"
+    assert (entry, exit_, qty) == pytest.approx((105.07, 107.0, 0.24))
+    realized, costs = risk.results[0]
+    assert realized == pytest.approx(47.26)                    # INR straight from Shark, NOT scaled again
+    assert costs == pytest.approx(2.52 - 0.25 + 0.59)          # fees - discounts - funding(signed)
+
+
+def test_estimate_fallback_is_converted_to_inr():
+    ex = FakeExchange()
+    ex.position = pos("LONG", 0.5, 90.0)                       # candles close at 100 -> +10 USDT/SOL
+    ex.max_iterations = 4
+    ex.on_iteration = lambda f, i: setattr(f, "position", None) if i == 3 else None
+    _, risk, tracker = run_loop(ex, quote_to_inr_rate=100.0)
+    assert tracker.trades[0][0] == "closed_on_exchange_estimated"
+    gross, fees = risk.results[0]
+    assert gross == pytest.approx((100.0 - 90.0) * 0.5 * 100.0)          # 5 USDT -> 500 INR
+    assert fees == pytest.approx(0.5 * 90.0 * (0.016 * 1.18 + 0.04 * 1.18) / 100 * 100.0)
+
+
+def test_dry_run_pnl_is_converted_to_inr_for_the_risk_limits():
+    ex = FakeExchange()
+    ex.max_iterations = 4
+    strat = FakeStrategy()
+    strat.entry = EntryPlan(100.0, 98.0, 106.0, True, "LONG")
+
+    def step(f, i):
+        if i == 2:
+            strat.entry = None
+            strat.exit = ("take_profit", 106.0, True)
+    ex.on_iteration = step
+    _, risk, tracker = run_loop(ex, strat, config={"dry_run": True}, quote_to_inr_rate=96.0)
+    gross, _fees = risk.results[0]
+    assert gross == pytest.approx((106.0 - 100.0) * 0.5 * 96.0)          # 3 USDT -> 288 INR, so the 3% daily-loss limit is in INR

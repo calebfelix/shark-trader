@@ -5,6 +5,7 @@ exception as 'state unknown, do nothing this iteration', never as 'flat'."""
 
 import time
 
+from .settlement import settle_position
 from .strategies.base import Position, Strategy
 
 
@@ -37,7 +38,13 @@ class ExchangeSync:
             maker = True
         return Position(entry_price=entry, qty=qty, entry_notional=entry * qty,
                         stop_loss_price=sl, take_profit_price=tp,
-                        entry_is_maker=maker, side=side)
+                        entry_is_maker=maker, side=side,
+                        position_id=ex_pos.get("position_id"), opened_at_ms=ex_pos.get("opened_at_ms"))
+
+    def settle(self, position: Position) -> dict | None:
+        """Real INR result of a position that just closed, from Shark's trade history + ledger."""
+        return settle_position(self.exchange, self.symbol, position.position_id, position.side,
+                               position.opened_at_ms)
 
     def _stops(self) -> list[dict]:
         return [o for o in self.exchange.list_open_orders(self.symbol) if _is_stop(o)]

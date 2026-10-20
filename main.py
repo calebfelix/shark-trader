@@ -131,7 +131,7 @@ def cmd_run(args, config: dict):
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
-    live_engine.run(strategy, exchange, executor, risk, tracker, config)
+    live_engine.run(strategy, exchange, executor, risk, tracker, config, quote_to_inr_rate=quote_to_inr_rate)
 
 
 def main():

@@ -13,7 +13,8 @@ from .strategies.base import Position, Strategy
 
 
 def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
-        risk: RiskManager, tracker: PerformanceTracker, config: dict):
+        risk: RiskManager, tracker: PerformanceTracker, config: dict,
+        quote_to_inr_rate: float = 1.0):
     symbol = config["symbol"]
     interval = strategy.params["kline_interval"]
     poll_seconds = config["poll_seconds"]
@@ -37,7 +38,8 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
               f"(reconciled every {poll_seconds}s); a hard stop-loss rests on the exchange.")
 
     def close_out(position, reason, exit_price, exit_is_maker):
-        """Book a closed trade (shared by the dry-run and reconciled paths)."""
+        """Book a closed trade from ESTIMATED numbers (dry run, or when Shark's data is unavailable).
+        Prices are in the quote currency (USDT...), but risk/tracker work in INR - convert."""
         if position.side == "LONG":
             gross_pnl = (exit_price - position.entry_price) * position.qty
         else:
@@ -45,8 +47,20 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
         fee_pct = round_trip_fee_estimate(maker_fee_pct, taker_fee_pct,
                                            position.entry_is_maker, exit_is_maker)
         fees = position.entry_notional * fee_pct / 100
+        gross_pnl *= quote_to_inr_rate
+        fees *= quote_to_inr_rate
         risk.record_trade_result(gross_pnl, fees)
         tracker.record(position.entry_price, exit_price, position.qty, reason, gross_pnl, fees)
+
+    def book_settled(reason, s):
+        """Book a closed trade from Shark's own numbers (INR): nothing estimated."""
+        costs = s["fees_inr"] - s["discounts_inr"] - s["funding_inr"]   # funding is signed: paid < 0
+        print(f"    Settled from exchange: realized {s['realized_inr']:+.2f} | fees -{s['fees_inr']:.2f} "
+              f"| fee discount +{s['discounts_inr']:.2f} | funding {s['funding_inr']:+.2f} "
+              f"=> NET {s['net_inr']:+.2f} INR  (entry {s['entry_role']}, exit {s['exit_role']}, "
+              f"exit @ {s['exit_price']:.2f})")
+        risk.record_trade_result(s["realized_inr"], costs)
+        tracker.record(s["entry_price"], s["exit_price"], s["qty"], reason, s["realized_inr"], costs)
 
     position: Position | None = None
     bars_since_open = 0
@@ -79,8 +93,14 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                     reason = pending_exit.info["reason"] if pending_exit else "closed_on_exchange"
                     exit_price = pending_exit.info["price"] if pending_exit else price
                     exit_is_maker = pending_exit.info["maker"] if pending_exit else False
-                    print(f"    Position is closed on the exchange ({reason}) - booking trade at ~{exit_price:.2f}")
-                    close_out(position, reason, exit_price, exit_is_maker)
+                    print(f"    Position is closed on the exchange ({reason}) - settling from Shark's records")
+                    settled = sync.settle(position)
+                    if settled:
+                        book_settled(reason, settled)
+                    else:
+                        print("    WARNING: Shark's trade history is incomplete - booking an ESTIMATE instead "
+                              "(check the Shark app for the real result)")
+                        close_out(position, reason + "_estimated", exit_price, exit_is_maker)
                     sync.cancel_all_resting()
                     position, pending_exit, bars_since_open = None, None, 0
                 elif position is not None and abs(ex_pos["qty"] - position.qty) > 1e-9:

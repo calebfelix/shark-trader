@@ -17,6 +17,8 @@ class Position:
     entry_is_maker: bool
     side: str  # "LONG" or "SHORT"
     opened_at: Optional[int] = None  # candle index at open; set by backtest_engine only
+    position_id: Optional[str] = None   # exchange positionId (real mode only)
+    opened_at_ms: Optional[int] = None  # exchange open time, epoch ms (real mode only)
 
 
 @dataclass

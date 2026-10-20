@@ -830,3 +830,21 @@ rejected and why:
 - Tests (`tests/test_live_reconcile.py`) use a fake exchange. The STOP_MARKET request shape and the
   positions/open-orders field names come from docs.sharkexchange.in and have NOT been verified against a
   live fill - verify with a tiny position before trusting it.
+
+## Real results come from Shark, in INR (2026-10-20)
+
+`shark/settlement.py` settles a position that closed in real mode from Shark's own records instead of the
+bot's estimate: `/v1/user-data/trade-history` (real fills, `feeInMarginAsset` = fee incl. GST in INR,
+`realizedProfitInMarginAsset`) and `/v1/user-data/transaction-history` (ledger: `FEE_DISCOUNT`,
+`FUNDING_FEE`, `GST_ON_FUNDING_FEE`, ...). Verified against all 30 CLOSED positions on the account: net equals
+the ledger total to the paisa. Facts learned the hard way:
+- `realizedProfit` is the GROSS price P&L - it does NOT include fees (matches fills exactly).
+- `FEE_DISCOUNT` ledger rows have no tradeId; they are booked ~70 ms after the fill they discount (10% of that
+  fill's fee) - matched by time (`DISCOUNT_WINDOW_MS`), not by id.
+- Funding (`FUNDING_FEE`) is signed (paid < 0, received > 0) and has no positionId - matched by the time window
+  the position was open. Needs epoch-ms `startTimestamp` and lowercase `sortOrder`.
+- Fills show `role`: a limit entry priced at/above the market is a TAKER fill (paid the taker fee, not maker).
+- If settlement data is missing the trade is booked as an ESTIMATE with the reason suffixed `_estimated`.
+- UNIT FIX: risk/tracker work in INR, but the engine used to feed them quote-currency (USDT) P&L and fees, which
+  made the 3% daily-loss halt ~96x too loose on USDT pairs. `live_engine.run(..., quote_to_inr_rate=)` now
+  converts estimates to INR (dry run too). The backtest engine has NOT been audited for the same thing.
