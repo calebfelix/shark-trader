@@ -462,6 +462,7 @@ input[type=password],input[type=text]{width:100%;font:inherit;color:var(--ink);b
       <span class="pill" id="runpill"></span>
       <span class="pill dry" id="drypill" hidden>DRY RUN</span>
       <span class="pill off" id="livepill" hidden>LIVE - REAL MONEY</span>
+      <a class="navlink" href="/health">Health</a>
       <a class="navlink" href="/settings">Settings</a>
       <select id="strategy" aria-label="Strategy"></select>
       <button class="start" id="startbtn">Start</button>
@@ -776,6 +777,198 @@ $("clear").addEventListener("click", async () => {
   refresh();
 });
 refresh();
+</script>
+</body>
+</html>
+""".replace("__STYLE__", _STYLE)
+
+
+# ---------------------------------------------------------------- system health
+
+_net_prev = {"at": 0.0, "sent": 0, "recv": 0}
+
+
+def _unit_active(name: str) -> str:
+    """systemd state of a unit ('active', 'inactive', ...); 'n/a' off Linux."""
+    try:
+        r = subprocess.run(["systemctl", "is-active", name], capture_output=True, text=True, timeout=3)
+        return (r.stdout.strip() or "unknown")
+    except (OSError, subprocess.SubprocessError):
+        return "n/a"
+
+
+def _clock_synced():
+    try:
+        r = subprocess.run(["timedatectl", "show", "-p", "NTPSynchronized", "--value"],
+                           capture_output=True, text=True, timeout=3)
+        v = r.stdout.strip().lower()
+        return True if v == "yes" else False if v == "no" else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def build_health() -> dict:
+    now = time.time()
+    vm, sw = psutil.virtual_memory(), psutil.swap_memory()
+    disk = psutil.disk_usage(str(ROOT))
+    net = psutil.net_io_counters()
+    up_bps = down_bps = None
+    if _net_prev["at"]:
+        dt = max(now - _net_prev["at"], 0.001)
+        up_bps = (net.bytes_sent - _net_prev["sent"]) / dt
+        down_bps = (net.bytes_recv - _net_prev["recv"]) / dt
+    _net_prev.update(at=now, sent=net.bytes_sent, recv=net.bytes_recv)
+
+    try:
+        load = list(os.getloadavg())
+    except (AttributeError, OSError):
+        load = None
+    temps = None
+    try:
+        t = psutil.sensors_temperatures()
+        flat = [x.current for v in t.values() for x in v if x.current]
+        temps = max(flat) if flat else None
+    except (AttributeError, psutil.Error):
+        pass
+
+    bot = {"running": False}
+    pids = find_bot_pids()
+    if pids:
+        try:
+            p = psutil.Process(pids[0])
+            with p.oneshot():
+                bot = {"running": True, "pid": p.pid, "cpu_pct": p.cpu_percent(None),
+                       "rss_mb": p.memory_info().rss / 1e6,
+                       "uptime_s": now - p.create_time(), "threads": p.num_threads()}
+        except psutil.Error:
+            pass
+    log_age = (now - LOG_PATH.stat().st_mtime) if LOG_PATH.exists() else None
+
+    top = []
+    for p in psutil.process_iter(["pid", "name", "memory_info"]):
+        try:
+            top.append({"pid": p.info["pid"], "name": p.info["name"],
+                        "rss_mb": p.info["memory_info"].rss / 1e6})
+        except (psutil.Error, AttributeError, TypeError):
+            continue
+    top.sort(key=lambda x: -x["rss_mb"])
+
+    return {
+        "now": datetime.now().isoformat(timespec="seconds"),
+        "uptime_s": now - psutil.boot_time(),
+        "cpu_pct": psutil.cpu_percent(interval=0.3),
+        "cpu_cores": psutil.cpu_percent(interval=None, percpu=True),
+        "cpu_count": psutil.cpu_count(),
+        "load": load, "temp_c": temps,
+        "mem": {"total": vm.total, "used": vm.total - vm.available, "pct": vm.percent},
+        "swap": {"total": sw.total, "used": sw.used, "pct": sw.percent},
+        "disk": {"total": disk.total, "used": disk.used, "pct": disk.percent},
+        "net": {"up_bps": up_bps, "down_bps": down_bps, "sent": net.bytes_sent, "recv": net.bytes_recv},
+        "bot": bot, "bot_log_age_s": log_age,
+        "services": {n: _unit_active(n) for n in ("shark-dashboard", "caddy", "ssh")}
+                    if os.name != "nt" else {},
+        "clock_synced": _clock_synced(),
+        "top": top[:6],
+    }
+
+
+@app.get("/api/health")
+def api_health():
+    return build_health()
+
+
+@app.get("/health", response_class=HTMLResponse)
+def health_page():
+    return HEALTH_PAGE
+
+
+HEALTH_PAGE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shark Trader Health</title>
+__STYLE__
+<style>
+ .bar{height:8px;border-radius:4px;background:var(--grid);overflow:hidden;margin-top:8px}
+ .bar>i{display:block;height:100%;background:var(--good);width:0}
+ .bar>i.warn{background:var(--warn)} .bar>i.bad{background:var(--bad)}
+ .pill{display:inline-block;padding:2px 10px;border-radius:99px;font-size:12px;font-weight:600;margin:2px 6px 2px 0}
+ .pill.ok{background:var(--goodbg);color:var(--good)} .pill.no{background:var(--badbg);color:var(--bad)}
+ .pill.na{background:var(--warnbg);color:var(--warn)}
+ table.t{width:100%;border-collapse:collapse;font-size:13px} table.t td,table.t th{padding:5px 8px;text-align:left;border-bottom:1px solid var(--line)}
+ .cores{display:flex;gap:4px;align-items:flex-end;height:44px;margin-top:10px}
+ .cores i{flex:1;background:var(--accent);min-width:4px;border-radius:2px 2px 0 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div><h1>System health</h1><div class="sub" id="sub">loading...</div></div>
+    <div class="controls"><a class="navlink" href="/">&larr; Dashboard</a>
+    <a class="navlink" href="/settings">Settings</a></div>
+  </header>
+  <section class="card"><h2>Status</h2><div id="status"></div></section>
+  <section class="kpis" id="kpis" style="margin-top:12px"></section>
+  <div class="grid2" style="margin-top:12px">
+    <section class="card"><h2>Trading bot process</h2><div id="bot"></div></section>
+    <section class="card"><h2>Top processes by memory</h2><div id="top"></div></section>
+  </div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const gb = b => (b/1073741824).toFixed(1) + " GB";
+const mb = b => b.toFixed(0) + " MB";
+function dur(s){ s=Math.floor(s); const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
+  return (d?d+"d ":"") + (h||d?h+"h ":"") + m + "m"; }
+function rate(b){ return b==null ? "-" : b>1e6 ? (b/1e6).toFixed(1)+" MB/s" : (b/1e3).toFixed(1)+" KB/s"; }
+function lvl(p){ return p>=90 ? "bad" : p>=75 ? "warn" : ""; }
+function pill(txt, ok){ const s=document.createElement("span"); s.className="pill "+(ok===null?"na":ok?"ok":"no"); s.textContent=txt; return s; }
+function card(label, value, sub, pct){
+  const c=document.createElement("div"); c.className="card k";
+  const l=document.createElement("div"); l.className="l"; l.textContent=label;
+  const v=document.createElement("div"); v.className="v"; v.textContent=value;
+  const s=document.createElement("div"); s.className="s"; s.textContent=sub||"";
+  c.append(l,v,s);
+  if (pct!=null){ const b=document.createElement("div"); b.className="bar"; const i=document.createElement("i");
+    i.className=lvl(pct); i.style.width=Math.min(pct,100)+"%"; b.append(i); c.append(b); }
+  return c;
+}
+function render(h){
+  $("sub").textContent = "Updated " + h.now.replace("T"," ") + " - server up " + dur(h.uptime_s);
+  const st=$("status"); st.replaceChildren();
+  const b=h.bot, stale = h.bot_log_age_s!=null && h.bot_log_age_s>180;
+  st.append(pill(b.running ? "Bot running" : "Bot stopped", b.running));
+  if (b.running) st.append(pill(stale ? "Bot silent " + dur(h.bot_log_age_s) : "Bot logging", !stale));
+  for (const [n,v] of Object.entries(h.services)) st.append(pill(n+": "+v, v==="active"));
+  st.append(pill(h.clock_synced===null ? "Clock: unknown" : h.clock_synced ? "Clock synced" : "Clock NOT synced",
+                 h.clock_synced));
+  const k=$("kpis"); k.replaceChildren();
+  k.append(card("CPU", h.cpu_pct.toFixed(0)+"%", h.cpu_count+" cores" + (h.load ? " - load "+h.load.map(x=>x.toFixed(2)).join(" / ") : ""), h.cpu_pct));
+  k.append(card("Memory", h.mem.pct.toFixed(0)+"%", gb(h.mem.used)+" of "+gb(h.mem.total), h.mem.pct));
+  k.append(card("Disk", h.disk.pct.toFixed(0)+"%", gb(h.disk.used)+" of "+gb(h.disk.total), h.disk.pct));
+  k.append(card("Swap", h.swap.total ? h.swap.pct.toFixed(0)+"%" : "none", h.swap.total ? gb(h.swap.used)+" of "+gb(h.swap.total) : "", h.swap.total ? h.swap.pct : null));
+  k.append(card("Network", "↑ "+rate(h.net.up_bps), "↓ "+rate(h.net.down_bps)+" - total ↑"+gb(h.net.sent)+" ↓"+gb(h.net.recv)));
+  if (h.temp_c!=null) k.append(card("Temperature", h.temp_c.toFixed(0)+" °C", "hottest sensor", h.temp_c));
+  const cores=document.createElement("div"); cores.className="cores"; cores.title="CPU per core";
+  for (const p of h.cpu_cores){ const i=document.createElement("i"); i.style.height=Math.max(p,3)+"%"; cores.append(i); }
+  k.children[0].append(cores);
+  const bot=$("bot"); bot.replaceChildren();
+  if (!b.running){ bot.textContent = "Not running."; }
+  else { const t=document.createElement("table"); t.className="t";
+    for (const [a,v] of [["PID",b.pid],["Uptime",dur(b.uptime_s)],["CPU",b.cpu_pct.toFixed(1)+"%"],["Memory",mb(b.rss_mb)],["Threads",b.threads],
+        ["Last log line", h.bot_log_age_s==null ? "-" : dur(h.bot_log_age_s)+" ago"]]){
+      const r=t.insertRow(); r.insertCell().textContent=a; r.insertCell().textContent=v; }
+    bot.append(t); }
+  const top=$("top"); top.replaceChildren(); const t=document.createElement("table"); t.className="t";
+  for (const p of h.top){ const r=t.insertRow(); r.insertCell().textContent=p.name; r.insertCell().textContent=p.pid; r.insertCell().textContent=mb(p.rss_mb); }
+  top.append(t);
+}
+async function refresh(){
+  try { render(await (await fetch("/api/health")).json()); }
+  catch(e){ $("sub").textContent = "Could not reach the dashboard server."; }
+}
+refresh(); setInterval(refresh, 5000);
 </script>
 </body>
 </html>
