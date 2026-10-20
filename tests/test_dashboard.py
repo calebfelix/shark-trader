@@ -70,3 +70,19 @@ class TestBotProcessMatching:
         assert not is_bot_cmdline(["python", "dashboard.py"])
         assert not is_bot_cmdline(["python", "verify_order_endpoint.py"])
         assert not is_bot_cmdline(None)
+
+
+class TestThemeToggle:
+    def test_every_page_has_the_toggle_and_a_manual_dark_override(self):
+        import dashboard as d
+        for name in ("PAGE", "SETTINGS_PAGE", "HEALTH_PAGE"):
+            html = getattr(d, name)
+            assert "themebtn" in html, name
+            assert '[data-theme="dark"]' in html and ':not([data-theme="light"])' in html, name
+            assert "localStorage" in html and "shark-theme" in html, name
+
+    def test_storage_failure_is_harmless(self):
+        # localStorage can throw (private window, blocked storage): the toggle must still work
+        import dashboard as d
+        assert 'try { return localStorage.getItem(KEY); } catch(e){ return null; }' in d.PAGE
+        assert 'try { localStorage.setItem(KEY, n); } catch(e){}' in d.PAGE

@@ -447,11 +447,16 @@ PAGE = r"""<!doctype html>
   --goodbg:#e4f4ec; --badbg:#fbe9e7; --warnbg:#fff3d6; --warn:#8a5a00;
 }
 @media (prefers-color-scheme: dark){
-  :root{
+  :root:not([data-theme="light"]){
     --bg:#0f1218; --card:#171b23; --ink:#e8ebf0; --ink2:#a9b1bf; --muted:#7c8697;
     --line:#2a303b; --grid:#222833; --accent:#6d9bff; --good:#4cc79a; --bad:#ff7d73;
     --goodbg:#16352a; --badbg:#3a1f1c; --warnbg:#3a2f12; --warn:#f0c15a;
   }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1218; --card:#171b23; --ink:#e8ebf0; --ink2:#a9b1bf; --muted:#7c8697;
+  --line:#2a303b; --grid:#222833; --accent:#6d9bff; --good:#4cc79a; --bad:#ff7d73;
+  --goodbg:#16352a; --badbg:#3a1f1c; --warnbg:#3a2f12; --warn:#f0c15a;
 }
 *{box-sizing:border-box}
 [hidden]{display:none!important}
@@ -504,6 +509,32 @@ input[type=password],input[type=text]{width:100%;font:inherit;color:var(--ink);b
   border:1px solid var(--line);border-radius:8px;padding:9px 12px}
 .narrow{max-width:560px}
 </style>
+<!--theme-->
+<style>
+#themebtn{position:fixed;right:14px;bottom:14px;z-index:50;border:1px solid var(--line);background:var(--card);
+  color:var(--ink);border-radius:99px;padding:8px 14px;font:600 13px system-ui,sans-serif;cursor:pointer;
+  box-shadow:0 2px 8px rgba(0,0,0,.18)}
+#themebtn:hover{border-color:var(--accent)}
+</style>
+<script>
+(function(){
+  var KEY = "shark-theme", root = document.documentElement;
+  function saved(){ try { return localStorage.getItem(KEY); } catch(e){ return null; } }
+  function systemDark(){ return !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches); }
+  function current(){ return root.getAttribute("data-theme") || (systemDark() ? "dark" : "light"); }
+  var s = saved(); if (s === "dark" || s === "light") root.setAttribute("data-theme", s);
+  document.addEventListener("DOMContentLoaded", function(){
+    var b = document.createElement("button"); b.id = "themebtn"; b.type = "button";
+    function label(){ var d = current() === "dark"; b.textContent = d ? "☀ Light" : "☾ Dark";
+      b.setAttribute("aria-label", "Switch to " + (d ? "light" : "dark") + " mode"); }
+    b.addEventListener("click", function(){
+      var n = current() === "dark" ? "light" : "dark"; root.setAttribute("data-theme", n);
+      try { localStorage.setItem(KEY, n); } catch(e){} label(); });
+    label(); document.body.appendChild(b);
+  });
+})();
+</script>
+<!--/theme-->
 </head>
 <body>
 <div class="wrap">
@@ -777,7 +808,7 @@ setInterval(refreshWallet, 5000);
 """
 
 
-_STYLE = re.search(r"<style>.*?</style>", PAGE, re.S).group(0)
+_STYLE = re.search(r"<style>.*?</style>", PAGE, re.S).group(0) + re.search(r"<!--theme-->.*?<!--/theme-->", PAGE, re.S).group(0)
 
 SETTINGS_PAGE = r"""<!doctype html>
 <html lang="en">
