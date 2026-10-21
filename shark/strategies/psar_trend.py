@@ -33,6 +33,7 @@ class _ParabolicSAR:
         self.ep: Optional[float] = None
         self.sar: Optional[float] = None
         self.trend: Optional[str] = None
+        self.stop_level: Optional[float] = None  # the SAR level in force DURING the last candle (before any flip)
 
     def update(self, high: float, low: float, close: float) -> tuple[Optional[float], Optional[str]]:
         if self.sar is None:
@@ -44,6 +45,7 @@ class _ParabolicSAR:
             return None, None
 
         self.sar += self.af * (self.ep - self.sar)
+        self.stop_level = self.sar  # a flip below replaces self.sar with the old extreme - NOT a reachable price
 
         if self.trend == "up" and low < self.sar:
             self.trend = "down"
@@ -89,17 +91,17 @@ class PSARTrendStrategy(Strategy):
         after the first poll instead of updating it. See CLAUDE.md."""
         calc = _ParabolicSAR(self.params["initial_af"], self.params["max_af"])
         trend_prev: Optional[str] = None
-        sar_cur = trend_cur = None
+        sar_cur = trend_cur = stop_cur = None
         for c in candles:
             s, t = calc.update(c["high"], c["low"], c["close"])
             if s is not None:
                 trend_prev = trend_cur if trend_cur is not None else trend_prev
-                sar_cur, trend_cur = s, t
+                sar_cur, trend_cur, stop_cur = s, t, calc.stop_level
 
         if sar_cur is None:
             return None
         flipped = trend_prev is not None and trend_cur != trend_prev
-        return {"sar": sar_cur, "trend": trend_cur, "flipped": flipped}
+        return {"sar": sar_cur, "trend": trend_cur, "flipped": flipped, "stop_level": stop_cur}
 
     def entry_plan(self, price: float, candle: dict, indicators: Optional[dict]) -> Optional[EntryPlan]:
         if indicators is None or not indicators["flipped"]:
@@ -134,19 +136,22 @@ class PSARTrendStrategy(Strategy):
         if indicators is None:
             return None
         sar = indicators["sar"]
+        # When SAR flips, `sar` becomes the old trend extreme (the best price of the whole move - unreachable).
+        # The price the trailing stop really triggers at is the level that was in force during the candle.
+        stop_px = indicators.get("stop_level") or sar
 
         if position.side == "LONG":
             if candle["low"] <= position.stop_loss_price:
                 return "stop_loss", position.stop_loss_price, False
             if candle["low"] <= sar:
-                return "psar_trailing_stop", sar, False
+                return "psar_trailing_stop", stop_px, False
             if candle["high"] >= position.take_profit_price:
                 return "take_profit", position.take_profit_price, True
         else:
             if candle["high"] >= position.stop_loss_price:
                 return "stop_loss", position.stop_loss_price, False
             if candle["high"] >= sar:
-                return "psar_trailing_stop", sar, False
+                return "psar_trailing_stop", stop_px, False
             if candle["low"] <= position.take_profit_price:
                 return "take_profit", position.take_profit_price, True
         return None

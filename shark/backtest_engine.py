@@ -1,6 +1,12 @@
-"""Strategy-agnostic backtest engine. Simulates limit orders always
-filling at the intended price (no slippage/partial-fill modeling) - real
-performance will likely be somewhat worse. See CLAUDE.md caveats.
+"""Strategy-agnostic backtest engine.
+
+Fill model (config backtest.realistic_fills, default true), based on what the live bot actually paid:
+  * entries are marketable (limit set at/through the market, or a market order) -> TAKER fee, plus slippage;
+  * stop and signal exits are market orders -> TAKER; a stop that gaps past its level fills at the worse
+    price (the open), plus slippage; signal exits (RSI/mid-band/max-hold) are NOT free maker fills;
+  * only a resting take-profit limit keeps its MAKER fee and fills at its level.
+Set realistic_fills=false to get the old idealised numbers (everything fills at the intended price, makers
+for anything a strategy calls maker) - those over-state results. Funding and leverage limits are not modelled.
 """
 
 from dataclasses import dataclass
@@ -38,7 +44,24 @@ class Trade:
         self.net_pnl = self.gross_pnl - self.fees
 
 
+STOP_REASONS = ("stop_loss", "psar_trailing_stop")
+
+
+def realistic_exit(side: str, reason: str, price: float, is_maker: bool, candle_open: float,
+                   slippage: float) -> tuple[float, bool]:
+    """(fill price, is_maker) for an exit the strategy decided at `price`."""
+    if reason == "take_profit" and is_maker:
+        return price, True                         # resting limit, filled at its level
+    if reason in STOP_REASONS:                     # market order after a trigger: a gap fills at the open
+        price = min(price, candle_open) if side == "LONG" else max(price, candle_open)
+    # closing a LONG sells (worse = lower), closing a SHORT buys (worse = higher)
+    return price * (1 - slippage if side == "LONG" else 1 + slippage), False
+
+
 def run_backtest(strategy: Strategy, candles: list[dict], config: dict) -> tuple[list[Trade], list[float]]:
+    bt_cfg = config.get("backtest", {})
+    realistic = bt_cfg.get("realistic_fills", True)
+    slippage = bt_cfg.get("slippage_pct", 0.02) / 100.0 if realistic else 0.0
     fees_cfg = config["fees"]
     maker_fee_pct = effective_fee_pct(fees_cfg["maker_fee_pct"], fees_cfg["gst_pct"])
     taker_fee_pct = effective_fee_pct(fees_cfg["taker_fee_pct"], fees_cfg["gst_pct"])
@@ -62,6 +85,9 @@ def run_backtest(strategy: Strategy, candles: list[dict], config: dict) -> tuple
             decision = strategy.exit_decision(position, candle, indicators, bars_held)
             if decision is not None:
                 reason, exit_price, exit_is_maker = decision
+                if realistic:
+                    exit_price, exit_is_maker = realistic_exit(position.side, reason, exit_price, exit_is_maker,
+                                                               candle["open"], slippage)
                 trade = Trade(entry_price=position.entry_price, qty=position.qty,
                                entry_notional=position.entry_notional,
                                entry_is_maker=position.entry_is_maker, side=position.side)
@@ -78,12 +104,16 @@ def run_backtest(strategy: Strategy, candles: list[dict], config: dict) -> tuple
                     qty = calc_position_size(plan.entry_price, plan.stop_loss_price,
                                               risk_per_trade_pct, equity)
                     if qty > 0:
+                        entry_fill, entry_maker = plan.entry_price, plan.is_maker
+                        if realistic:                      # marketable entry: pays the taker fee, slips against us
+                            entry_maker = False
+                            entry_fill = plan.entry_price * (1 + slippage if plan.side == "LONG" else 1 - slippage)
                         position = Position(
-                            entry_price=plan.entry_price, qty=qty,
-                            entry_notional=plan.entry_price * qty,
+                            entry_price=entry_fill, qty=qty,
+                            entry_notional=entry_fill * qty,
                             stop_loss_price=plan.stop_loss_price,
                             take_profit_price=plan.take_profit_price,
-                            entry_is_maker=plan.is_maker,
+                            entry_is_maker=entry_maker,
                             side=plan.side,
                             opened_at=idx,
                         )

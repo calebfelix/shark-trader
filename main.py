@@ -53,6 +53,12 @@ def cmd_backtest(args, config: dict):
     backtest_engine.plot_equity_curve(strategy.name, config["symbol"], interval, equity_curve, config)
 
 
+def cmd_compare(args, config: dict):
+    from shark import compare
+    names = list(STRATEGIES) if args.strategies == "all" else args.strategies.split(",")
+    compare.run_compare(config, ExchangeClient(config["base_url"]), names, args.days, args.max_candles)
+
+
 def cmd_run(args, config: dict):
     strategy = build_strategy(args.strategy, config)
     exchange = ExchangeClient(config["base_url"], config["api_key"], config["api_secret"])
@@ -145,6 +151,11 @@ def main():
     p_backtest = sub.add_parser("backtest", help="Backtest a strategy against historical candles")
     p_backtest.add_argument("--strategy", default="mean_reversion", choices=STRATEGIES.keys())
 
+    p_cmp = sub.add_parser("compare", help="Compare strategies with realistic fills and a train/test split")
+    p_cmp.add_argument("--strategies", default="all", help="comma-separated names, or 'all'")
+    p_cmp.add_argument("--days", type=int, default=180)
+    p_cmp.add_argument("--max-candles", type=int, default=20000, help="cap per strategy (1m strategies would be huge)")
+
     p_run = sub.add_parser("run", help="Run a strategy live/dry-run against the poll loop")
     p_run.add_argument("--strategy", default="mean_reversion", choices=STRATEGIES.keys())
 
@@ -153,6 +164,8 @@ def main():
 
     if args.command == "backtest":
         cmd_backtest(args, config)
+    elif args.command == "compare":
+        cmd_compare(args, config)
     elif args.command == "run":
         cmd_run(args, config)
 

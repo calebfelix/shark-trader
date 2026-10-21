@@ -863,3 +863,20 @@ The Shark account is shared with the owner's manual trading, so the bot must nev
   simulated rows), shows each cost in its own column, and shows the bot's live position
   (`/api/position`, `shark/position_view.py`: entry fee, funding so far, estimated exit fee, net if closed now).
   `net_pnl = gross - fees + fee_discount + funding`. Old 10-column CSVs are upgraded in place.
+
+## ⚠️ CORRECTION: the earlier backtest results were inflated (2026-10-21)
+
+The old backtest booked `psar_trend`'s trailing-stop exit at the NEW SAR after a flip, which is the old trend's
+extreme price (a long's highest high / a short's lowest low) - a price no order can get. That produced the
+"+226%, 85% win rate" backtest, and the walk-forward numbers recorded above for `psar_trend` (87% win,
++24%, PF 16.96) are the same artefact and must NOT be relied on. The engine also treated marketable "limit"
+entries and signal exits (RSI/mid-band/max-hold) as cheap maker fills. Live trading showed the real picture
+(trade 2: logged exit 105.23, real fill 107.01, a loss).
+Fixes: `psar_trend` now reports `stop_level` (the SAR level in force during the candle) as the exit price, and
+`backtest_engine` has a realistic fill model (`backtest.realistic_fills`, default true; `slippage_pct`
+default 0.02): taker fees + slippage on entries and stop/signal exits, gaps fill at the open, only a resting
+take-profit keeps its maker fee. `python main.py compare --days 180` runs every strategy with an
+out-of-sample split. First result on SOLUSDT (180 days for the 1h strategies, 14 days for the 1m ones):
+every strategy lost money after realistic fills - psar_trend -35% (test slice -6.5%), sma and scalp deeply
+negative (fees alone 27-61% of capital), mean_reversion made only 4 trades (no evidence either way).
+Funding, leverage limits and one-regime/one-symbol bias are NOT modelled - treat results as a screen, not proof.
