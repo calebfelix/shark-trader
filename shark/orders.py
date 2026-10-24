@@ -28,7 +28,7 @@ def fee_gate_passes(plan, maker_fee_pct: float, taker_fee_pct: float,
     can't drift out of sync between them."""
     implied_move_pct = abs(plan.take_profit_price - plan.entry_price) / plan.entry_price * 100
     fee_cost_pct = round_trip_fee_estimate(maker_fee_pct, taker_fee_pct,
-                                            entry_is_maker=True, exit_is_maker=True)
+                                            entry_is_maker=plan.is_maker, exit_is_maker=True)
     return implied_move_pct >= fee_cost_pct * min_profit_to_fee_ratio
 
 

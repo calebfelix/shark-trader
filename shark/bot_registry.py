@@ -16,12 +16,14 @@ class BotRegistry:
         self.path = path
         self.order_ids: set[str] = set()
         self.position_ids: set[str] = set()
+        self.plans: dict[str, dict] = {}   # position id -> {"sl":..., "tp":...}: survives a bot restart
         if path and os.path.exists(path):
             try:
                 with open(path, encoding="utf-8") as f:
                     data = json.load(f)
                 self.order_ids = set(data.get("order_ids", []))
                 self.position_ids = set(data.get("position_ids", []))
+                self.plans = dict(data.get("plans", {}))
             except (OSError, ValueError):
                 pass  # unreadable state -> start empty: the bot then refuses to touch anything it can't prove is its own
 
@@ -30,7 +32,8 @@ class BotRegistry:
             return
         fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(self.path)), prefix=".bot_state_")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"order_ids": sorted(self.order_ids), "position_ids": sorted(self.position_ids)}, f, indent=1)
+            json.dump({"order_ids": sorted(self.order_ids), "position_ids": sorted(self.position_ids),
+                       "plans": self.plans}, f, indent=1)
         os.replace(tmp, self.path)
 
     def add_order(self, client_order_id: str | None) -> None:
@@ -48,3 +51,11 @@ class BotRegistry:
 
     def owns_position(self, position_id: str | None) -> bool:
         return position_id in self.position_ids
+
+    def set_plan(self, position_id: str | None, stop: float, target: float) -> None:
+        if position_id and self.plans.get(position_id) != {"sl": stop, "tp": target}:
+            self.plans[position_id] = {"sl": stop, "tp": target}
+            self._save()
+
+    def plan_for(self, position_id: str | None) -> dict | None:
+        return self.plans.get(position_id)

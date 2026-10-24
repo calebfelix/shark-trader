@@ -20,6 +20,7 @@ class ExchangeSync:
         self.symbol = symbol
         self.strategy = strategy
         self.registry = registry
+        self.adopt_source: str | None = None
 
     def owns(self, ex_pos: dict) -> bool:
         """Is this exchange position one WE opened? Yes if remembered, or if any fill that built it came
@@ -42,14 +43,18 @@ class ExchangeSync:
         entry plan when we placed it, else are recomputed from the strategy's
         configured percentages around the real entry price."""
         entry, side, qty = ex_pos["entry_price"], ex_pos["side"], ex_pos["qty"]
+        saved = self.registry.plan_for(ex_pos.get("position_id"))
         if plan is not None:
             sl, tp, maker = plan.stop_loss_price, plan.take_profit_price, plan.is_maker
+            self.adopt_source = "plan"
+        elif saved is not None:                     # a restart: the levels this position was opened with
+            sl, tp, maker = saved["sl"], saved["tp"], True
+            self.adopt_source = "saved"
         else:
-            p = self.strategy.params
-            sgn = 1 if side == "LONG" else -1
-            sl = entry * (1 - sgn * p["stop_loss_pct"] / 100.0)
-            tp = entry * (1 + sgn * p["take_profit_pct"] / 100.0)
+            sl, tp = self.strategy.recovery_levels(entry, side)
             maker = True
+            self.adopt_source = "recomputed"
+        self.registry.set_plan(ex_pos.get("position_id"), sl, tp)
         return Position(entry_price=entry, qty=qty, entry_notional=entry * qty,
                         stop_loss_price=sl, take_profit_price=tp,
                         entry_is_maker=maker, side=side,

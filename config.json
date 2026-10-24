@@ -81,7 +81,8 @@
       "max_bars": 24,
       "require_reversal": false,
       "allow_short": true,
-      "min_profit_to_fee_ratio": 1.5
+      "min_profit_to_fee_ratio": 1.5,
+      "fallback_stop_pct": 2.0
     }
   }
 }

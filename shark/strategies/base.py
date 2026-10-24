@@ -36,12 +36,24 @@ class Strategy:
     # MIN_PROFIT_TO_FEE_RATIO x round-trip fees. Only mean-reversion uses
     # this today - preserved from the original bot's behavior.
     fee_gate_enabled = False
+    # True: the live engine only decides on CLOSED candles, once per candle - matching how the backtest
+    # trades - instead of on the still-forming candle every poll.
+    acts_on_closed_candles = False
 
     def __init__(self, params: dict):
         self.params = params
 
     def min_candles_needed(self) -> int:
         raise NotImplementedError
+
+    def candles_to_fetch(self) -> int:
+        return max(self.min_candles_needed() + 10, 30)
+
+    def recovery_levels(self, entry: float, side: str) -> tuple[float, float]:
+        """(stop, target) for a position the bot must take back with no saved plan (last resort)."""
+        sgn = 1 if side == "LONG" else -1
+        return (entry * (1 - sgn * self.params["stop_loss_pct"] / 100.0),
+                entry * (1 + sgn * self.params["take_profit_pct"] / 100.0))
 
     def compute_indicators(self, candles: list[dict]) -> Optional[dict]:
         """candles is the full history seen so far (oldest first). Returns

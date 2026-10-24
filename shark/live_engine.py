@@ -5,6 +5,7 @@ import time
 import requests
 
 from .exchange import ExchangeClient
+from .intervals import INTERVAL_MS, bars_held
 from .bot_registry import BotRegistry
 from .live_sync import ExchangeSync, Pending
 from .orders import OrderExecutor, effective_fee_pct, fee_gate_passes, round_trip_fee_estimate
@@ -18,6 +19,7 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
         quote_to_inr_rate: float = 1.0):
     symbol = config["symbol"]
     interval = strategy.params["kline_interval"]
+    interval_ms = INTERVAL_MS[interval]
     poll_seconds = config["poll_seconds"]
     dry_run = config["dry_run"]
     fees_cfg = config["fees"]
@@ -72,8 +74,8 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                               "exit_role": s["exit_role"], "position_id": position.position_id or ""})
 
     position: Position | None = None
-    bars_since_open = 0
-    limit = max(strategy.min_candles_needed() + 10, 30)
+    limit = strategy.candles_to_fetch()
+    last_entry_check = last_exit_check = None   # closed-candle strategies decide once per closed candle
 
     while True:
         try:
@@ -84,7 +86,9 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                 continue
 
             price = candles[-1]["close"]
-            indicators = strategy.compute_indicators(candles)
+            closed = candles[:-1]                      # the last candle is still forming
+            view = closed if strategy.acts_on_closed_candles else candles
+            indicators = strategy.compute_indicators(view)
             print(f"{strategy.status_line(price, indicators)} "
                   f"position={position.side if position else 'None'}")
 
@@ -101,10 +105,10 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                     plan = pending_entry.info.get("plan") if pending_entry else None
                     position = sync.adopt(ex_pos, plan)
                     pending_entry = None
-                    bars_since_open = 0
+                    note = {"plan": "", "saved": " (adopted: SL/TP restored from saved state)",
+                            "recomputed": " (adopted: SL/TP recomputed from config - no saved plan)"}[sync.adopt_source]
                     print(f"    Confirmed on exchange: {position.side} {position.qty} @ {position.entry_price:.2f} "
-                          f"SL={position.stop_loss_price:.2f} TP={position.take_profit_price:.2f}"
-                          f"{'' if plan else ' (adopted: SL/TP recomputed from config)'}")
+                          f"SL={position.stop_loss_price:.2f} TP={position.take_profit_price:.2f}{note}")
                 elif position is not None and ex_pos is None:
                     reason = pending_exit.info["reason"] if pending_exit else "closed_on_exchange"
                     exit_price = pending_exit.info["price"] if pending_exit else price
@@ -118,7 +122,7 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                               "(check the Shark app for the real result)")
                         close_out(position, reason + "_estimated", exit_price, exit_is_maker)
                     sync.cancel_all_resting()
-                    position, pending_exit, bars_since_open = None, None, 0
+                    position, pending_exit = None, None
                 elif position is not None and abs(ex_pos["qty"] - position.qty) > 1e-9:
                     print(f"    Exchange size {ex_pos['qty']} differs from tracked {position.qty} - using exchange size")
                     position.qty = ex_pos["qty"]
@@ -149,7 +153,13 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                     pending_exit = Pending(None, reason=pending_exit.info["reason"], price=price, maker=False)
 
             if position is not None:
-                decision = strategy.exit_decision(position, candles[-1], indicators, bars_since_open)
+                held = bars_held(closed, position.opened_at_ms, interval_ms)
+                bar_time = view[-1].get("time")
+                if strategy.acts_on_closed_candles and (held < 1 or bar_time == last_exit_check):
+                    decision = None                    # no candle has closed since entry / this one is already judged
+                else:
+                    decision = strategy.exit_decision(position, view[-1], indicators, held)
+                    last_exit_check = bar_time
                 if decision is not None:
                     reason, exit_price, exit_is_maker = decision
                     close_side = "SELL" if position.side == "LONG" else "BUY"
@@ -170,10 +180,16 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                         else:
                             close_out(position, reason, exit_price, exit_is_maker)
                             position = None
-                            bars_since_open = 0
             else:
-                plan = None if (real and (pending_entry is not None or foreign is not None)) \
-                    else strategy.entry_plan(price, candles[-1], indicators)
+                bar_time = view[-1].get("time")
+                if real and (pending_entry is not None or foreign is not None):
+                    plan = None
+                elif strategy.acts_on_closed_candles and bar_time == last_entry_check:
+                    plan = None                        # this closed candle was already judged
+                else:
+                    plan = strategy.entry_plan(view[-1]["close"] if strategy.acts_on_closed_candles else price,
+                                               view[-1], indicators)
+                    last_entry_check = bar_time
                 if plan is not None:
                     if not risk.can_open_new_trade():
                         print("Signal found, but risk limits block new trades right now.")
@@ -218,7 +234,6 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                                 if ex_pos is not None and sync.owns(ex_pos):
                                     position = sync.adopt(ex_pos, plan)
                                     pending_entry = None
-                                    bars_since_open = 0
                                     print(f"    Confirmed on exchange: {position.side} {position.qty} @ "
                                           f"{position.entry_price:.2f} SL={position.stop_loss_price:.2f} "
                                           f"TP={position.take_profit_price:.2f}")
@@ -233,8 +248,8 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                                     take_profit_price=plan.take_profit_price,
                                     entry_is_maker=plan.is_maker,
                                     side=plan.side,
+                                    opened_at_ms=int(time.time() * 1000),
                                 )
-                                bars_since_open = 0
                                 print(f"    entry={position.entry_price:.2f} SL={position.stop_loss_price:.2f} "
                                       f"TP={position.take_profit_price:.2f}")
 
@@ -245,8 +260,5 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
             print(f"HTTP error: {body}")
         except Exception as e:
             print(f"Unexpected error: {e}")
-
-        if position is not None:
-            bars_since_open += 1
 
         time.sleep(poll_seconds)

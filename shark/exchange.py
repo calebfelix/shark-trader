@@ -117,6 +117,7 @@ class ExchangeClient:
                 "low": float(c["low"]),
                 "close": float(c["close"]),
                 "volume": float(c.get("volume", 0.0)),
+                "time": int(c["startTime"]),      # candle open, epoch ms
             } for c in data]
             all_candles = batch + all_candles
 

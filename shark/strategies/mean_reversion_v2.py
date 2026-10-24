@@ -22,10 +22,19 @@ def efficiency_ratio(closes: list[float], period: int) -> Optional[float]:
 class MeanReversionV2Strategy(Strategy):
     name = "mean_reversion_v2"
     fee_gate_enabled = True
+    acts_on_closed_candles = True
 
     def min_candles_needed(self) -> int:
         p = self.params
         return max(p["bb_period"], p["rsi_period"], p["atr_period"], p["er_period"]) + 2
+
+    def candles_to_fetch(self) -> int:
+        return max(super().candles_to_fetch(), int(self.params["max_bars"]) + 5)   # enough to count the time stop
+
+    def recovery_levels(self, entry: float, side: str) -> tuple[float, float]:
+        sgn = 1 if side == "LONG" else -1
+        pct = self.params["fallback_stop_pct"] / 100.0
+        return entry * (1 - sgn * pct), entry * (1 + sgn * pct)
 
     def compute_indicators(self, candles: list[dict]) -> Optional[dict]:
         p = self.params
