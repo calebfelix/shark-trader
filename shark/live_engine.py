@@ -1,5 +1,7 @@
 """Strategy-agnostic live/dry-run poll loop."""
 
+import json
+import os
 import time
 
 import requests
@@ -42,6 +44,28 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
     if real:
         print("Real-account mode: the exchange's open position is the source of truth "
               f"(reconciled every {poll_seconds}s); a hard stop-loss rests on the exchange.")
+
+    dry_state_path = f"dry_position_{symbol}.json"
+
+    def publish_dry(position):
+        """Dry run: let the dashboard show the simulated open position (it has no exchange to ask)."""
+        tmp = dry_state_path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"side": position.side, "qty": position.qty, "entry_price": position.entry_price,
+                       "stop_loss": position.stop_loss_price, "take_profit": position.take_profit_price,
+                       "opened_at_ms": position.opened_at_ms, "rate": quote_to_inr_rate,
+                       "entry_fee_pct": maker_fee_pct if position.entry_is_maker else taker_fee_pct,
+                       "exit_fee_pct": taker_fee_pct, "strategy": strategy.name}, f)
+        os.replace(tmp, dry_state_path)
+
+    def clear_dry():
+        try:
+            os.remove(dry_state_path)
+        except FileNotFoundError:
+            pass
+
+    if dry_run:
+        clear_dry()                                  # nothing is open at start
 
     def close_out(position, reason, exit_price, exit_is_maker):
         """Book a closed trade from ESTIMATED numbers (dry run, or when Shark's data is unavailable).
@@ -180,6 +204,7 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                         else:
                             close_out(position, reason, exit_price, exit_is_maker)
                             position = None
+                            clear_dry()
             else:
                 bar_time = view[-1].get("time")
                 if real and (pending_entry is not None or foreign is not None):
@@ -250,6 +275,7 @@ def run(strategy: Strategy, exchange: ExchangeClient, executor: OrderExecutor,
                                     side=plan.side,
                                     opened_at_ms=int(time.time() * 1000),
                                 )
+                                publish_dry(position)
                                 print(f"    entry={position.entry_price:.2f} SL={position.stop_loss_price:.2f} "
                                       f"TP={position.take_profit_price:.2f}")
 

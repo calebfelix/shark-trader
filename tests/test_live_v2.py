@@ -142,3 +142,39 @@ def test_klines_carry_candle_start_time(monkeypatch):
         def json(self): return [{"startTime": 1000, "open": "1", "high": "2", "low": "1", "close": "2"}]
     monkeypatch.setattr(exmod.requests, "post", lambda *a, **k: R())
     assert exmod.ExchangeClient("https://x").get_klines("SOLUSDT", "1h", 1)[0]["time"] == 1000
+
+
+def test_dry_run_publishes_and_clears_the_simulated_position(tmp_path, monkeypatch):
+    """The dashboard reads this file to show unrealised P&L in dry run."""
+    import json
+    from shark import live_engine
+    from shark.orders import OrderExecutor
+    from tests.test_live_reconcile import CONFIG, FakeRisk, FakeTracker, Stop, SYMBOL
+    monkeypatch.chdir(tmp_path)
+    path = tmp_path / f"dry_position_{SYMBOL}.json"
+    path.write_text("stale")
+    seen = []
+
+    class S(FakeStrategy):
+        def __init__(self):
+            super().__init__()
+            self.entry = EntryPlan(100.0, 98.0, 104.0, False, "LONG")
+
+        def entry_plan(self, price, c, ind):
+            plan, self.entry = self.entry, None            # one entry only
+            return plan
+
+        def exit_decision(self, position, c, ind, held):
+            seen.append(json.loads(path.read_text()))
+            return ("take_profit", 104.0, True) if len(seen) == 2 else None
+
+    ex = CandleExchange()
+    ex.max_iterations = 5
+    cfg = dict(CONFIG, dry_run=True)
+    executor = OrderExecutor(ex, SYMBOL, True, registry=BotRegistry(None))
+    try:
+        live_engine.run(S(), ex, executor, FakeRisk(), FakeTracker(), cfg, quote_to_inr_rate=90.0)
+    except Stop:
+        pass
+    assert seen[0]["side"] == "LONG" and seen[0]["rate"] == 90.0 and seen[0]["qty"] == 0.5
+    assert not path.exists()                                # cleared when the position closed

@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 import psutil  # noqa: E402
+import requests  # noqa: E402
 import uvicorn  # noqa: E402
 from fastapi import Depends, FastAPI, Header, HTTPException  # noqa: E402
 from fastapi.responses import HTMLResponse, JSONResponse  # noqa: E402
@@ -277,12 +278,38 @@ def fetch_balance() -> dict:
 _position_cache: dict = {"at": 0.0, "value": None}
 
 
+def fetch_dry_position(cfg: dict) -> dict:
+    """The simulated position of a running dry-run bot (its state file), valued at the live public price,
+    with the same fee and INR-rate maths the bot books at close. No signed request is ever made."""
+    path = ROOT / f"dry_position_{cfg['symbol']}.json"
+    if not find_bot_pids() or not path.exists():
+        return {"ok": True, "dry_run": True, "open": False}
+    try:
+        p = json.loads(path.read_text(encoding="utf-8"))
+        last = ExchangeClient(cfg["base_url"]).get_last_price(cfg["symbol"])
+    except (OSError, ValueError, requests.RequestException) as e:
+        return {"ok": False, "error": str(e)[:300]}
+    return {"ok": True, "dry_run": True, "open": True, **simulated_position_view(p, last)}
+
+
+def simulated_position_view(p: dict, last: float) -> dict:
+    sgn = 1 if p["side"] == "LONG" else -1
+    rate = p["rate"]
+    unrealised = sgn * (last - p["entry_price"]) * p["qty"] * rate
+    entry_fee = p["entry_price"] * p["qty"] * p["entry_fee_pct"] / 100 * rate
+    exit_fee = last * p["qty"] * p["exit_fee_pct"] / 100 * rate
+    return {"simulated": True, "side": p["side"], "qty": p["qty"], "entry_price": p["entry_price"],
+            "last_price": last, "unrealised_inr": unrealised, "entry_fee_inr": entry_fee,
+            "est_exit_fee_inr": exit_fee, "net_if_closed_now_inr": unrealised - entry_fee - exit_fee,
+            "stop_price": p["stop_loss"], "take_profit": p["take_profit"], "strategy": p.get("strategy")}
+
+
 def fetch_bot_position() -> dict:
     """The bot's own open position straight from the exchange, with entry fee, funding and the estimated
     exit fee. Real mode only; never reveals the owner's manual positions."""
     cfg = load_config()
     if cfg.get("dry_run") is True:
-        return {"ok": True, "dry_run": True, "open": False}
+        return fetch_dry_position(cfg)
     if not (cfg["api_key"] and cfg["api_secret"]):
         return {"ok": False, "error": "No API credentials saved."}
     now = time.time()
@@ -687,6 +714,18 @@ let botPos = null;
 function row(label, value, c){ return el("div",{class:"sub"}, label + ": ", el("b",{class:c||""}, value)); }
 function renderPosition(p){
   const box = $("position"); box.replaceChildren();
+  if (botPos && botPos.ok && botPos.open && botPos.simulated){
+    const b = botPos;
+    box.append(el("div",{}, el("b",{}, "Simulated position: " + b.side + " " + fmt(b.qty,4) + " @ " + fmt(b.entry_price))));
+    box.append(row("Last price", fmt(b.last_price)));
+    box.append(row("Unrealised P&L", signed(b.unrealised_inr) + " ₹", cls(b.unrealised_inr)));
+    box.append(row("Entry fee (estimated)", "−" + fmt(b.entry_fee_inr) + " ₹", "bad"));
+    box.append(row("Exit fee (estimated)", "−" + fmt(b.est_exit_fee_inr) + " ₹", "bad"));
+    box.append(row("If closed now, net", signed(b.net_if_closed_now_inr) + " ₹", cls(b.net_if_closed_now_inr)));
+    box.append(row("Stop-loss (simulated)", fmt(b.stop_price)));
+    box.append(el("div",{class:"sub"},"Dry run: simulated, no real order. Funding is not simulated."));
+    return;
+  }
   if (botPos && botPos.ok && botPos.open){
     const b = botPos;
     box.append(el("div",{}, el("b",{}, "Bot position: " + b.side + " " + fmt(b.qty,4) + " @ " + fmt(b.entry_price))));
@@ -711,9 +750,8 @@ function renderPosition(p){
 
 let lastPosAt = 0;
 async function refreshBotPosition(){
-  const live = state && !state.config.dry_run;
-  if (!live){ botPos = null; return; }
-  if (Date.now() - lastPosAt < 15000) return;
+  if (!state) return;
+  if (Date.now() - lastPosAt < (state.config.dry_run ? 5000 : 15000)) return;
   lastPosAt = Date.now();
   try { botPos = await api("/api/position"); if (state) renderPosition(state.position); } catch(e){}
 }

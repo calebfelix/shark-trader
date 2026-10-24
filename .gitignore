@@ -11,3 +11,5 @@ local_settings.json
 local_settings.json.tmp
 bot_state_*.json
 .bot_state_*
+dry_position_*.json
+dry_position_*.json.tmp

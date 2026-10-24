@@ -101,3 +101,38 @@ class TestRunningStrategy:
     def test_none_when_not_running(self):
         import dashboard
         assert dashboard.running_strategy([]) is None
+
+
+class TestSimulatedPosition:
+    P = {"side": "LONG", "qty": 2.0, "entry_price": 100.0, "stop_loss": 98.0, "take_profit": 104.0,
+         "rate": 90.0, "entry_fee_pct": 0.05, "exit_fee_pct": 0.05, "strategy": "x"}
+
+    def test_long_in_profit(self):
+        from dashboard import simulated_position_view
+        v = simulated_position_view(self.P, 101.0)
+        assert v["unrealised_inr"] == 180.0                       # (101-100) * 2 * 90
+        assert round(v["entry_fee_inr"], 4) == 9.0                # 200 * 0.05% * 90
+        assert round(v["est_exit_fee_inr"], 4) == 9.09
+        assert round(v["net_if_closed_now_inr"], 4) == round(180 - 9.0 - 9.09, 4)
+
+    def test_short_loses_when_price_rises(self):
+        from dashboard import simulated_position_view
+        v = simulated_position_view(dict(self.P, side="SHORT"), 101.0)
+        assert v["unrealised_inr"] == -180.0
+
+    def test_not_open_when_bot_stopped(self, monkeypatch, tmp_path):
+        import dashboard
+        (tmp_path / "dry_position_SOLUSDT.json").write_text("{}")
+        monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+        monkeypatch.setattr(dashboard, "find_bot_pids", lambda: [])
+        assert dashboard.fetch_dry_position({"symbol": "SOLUSDT"})["open"] is False
+
+    def test_open_when_bot_running(self, monkeypatch, tmp_path):
+        import json
+        import dashboard
+        (tmp_path / "dry_position_SOLUSDT.json").write_text(json.dumps(self.P))
+        monkeypatch.setattr(dashboard, "ROOT", tmp_path)
+        monkeypatch.setattr(dashboard, "find_bot_pids", lambda: [1])
+        monkeypatch.setattr(dashboard.ExchangeClient, "get_last_price", lambda self, s: 101.0)
+        v = dashboard.fetch_dry_position({"symbol": "SOLUSDT", "base_url": "https://x"})
+        assert v["open"] and v["simulated"] and v["unrealised_inr"] == 180.0
