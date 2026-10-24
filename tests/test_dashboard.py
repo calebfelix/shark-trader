@@ -86,3 +86,18 @@ class TestThemeToggle:
         import dashboard as d
         assert 'try { return localStorage.getItem(KEY); } catch(e){ return null; }' in d.PAGE
         assert 'try { localStorage.setItem(KEY, n); } catch(e){}' in d.PAGE
+
+
+class TestRunningStrategy:
+    def test_reads_strategy_from_cmdline(self, monkeypatch):
+        import dashboard
+
+        class P:
+            def cmdline(self):
+                return ["python", "-u", "main.py", "run", "--strategy", "mean_reversion_v2"]
+        monkeypatch.setattr(dashboard.psutil, "Process", lambda pid: P())
+        assert dashboard.running_strategy([123]) == "mean_reversion_v2"
+
+    def test_none_when_not_running(self):
+        import dashboard
+        assert dashboard.running_strategy([]) is None

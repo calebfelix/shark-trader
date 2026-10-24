@@ -253,3 +253,49 @@ class TestScalpStrategy:
         indicators = {"upper": 110, "mid": 100, "lower": 95, "rsi": 40}
         decision = strategy.exit_decision(position, candle, indicators, bars_held=1)
         assert decision[0] == "mid_band"
+
+
+class TestMeanReversionV2:
+    P = {"bb_period": 20, "bb_stddev": 2.0, "rsi_period": 14, "rsi_oversold": 30, "rsi_overbought": 70,
+         "atr_period": 14, "er_period": 20, "er_max": 0.3, "stop_atr_mult": 2.0, "max_bars": 5,
+         "require_reversal": False, "allow_short": True, "min_profit_to_fee_ratio": 1.5}
+
+    def _s(self, **kw):
+        from shark.strategies.mean_reversion_v2 import MeanReversionV2Strategy
+        return MeanReversionV2Strategy({**self.P, **kw})
+
+    def _ind(self, **kw):
+        return {"upper": 105.0, "mid": 100.0, "lower": 95.0, "rsi": 20.0, "atr": 1.0, "er": 0.1,
+                "ranging": True, **kw}
+
+    def test_long_below_lower_band(self):
+        plan = self._s().entry_plan(94.0, {"open": 95, "close": 94}, self._ind())
+        assert plan.side == "LONG" and plan.take_profit_price == 100.0 and plan.stop_loss_price == 92.0
+
+    def test_short_above_upper_band(self):
+        plan = self._s().entry_plan(106.0, {"open": 105, "close": 106}, self._ind(rsi=80.0))
+        assert plan.side == "SHORT" and plan.stop_loss_price == 108.0
+
+    def test_stands_aside_when_trending(self):
+        assert self._s().entry_plan(94.0, {"open": 95, "close": 94}, self._ind(ranging=False)) is None
+
+    def test_reversal_candle_required(self):
+        s = self._s(require_reversal=True)
+        assert s.entry_plan(94.0, {"open": 95, "close": 94}, self._ind()) is None
+        assert s.entry_plan(94.0, {"open": 93, "close": 94}, self._ind()) is not None
+
+    def test_exits(self):
+        from shark.strategies.base import Position
+        s = self._s()
+        long = Position(94, 1, 94, 92, 100, False, "LONG")
+        assert s.exit_decision(long, {"low": 91, "high": 95}, self._ind(), 1)[0] == "stop_loss"
+        assert s.exit_decision(long, {"low": 94, "high": 101}, self._ind(), 1) == ("take_profit", 100.0, True)
+        assert s.exit_decision(long, {"low": 94, "high": 96, "close": 95}, self._ind(), 5)[0] == "time_stop"
+        assert s.exit_decision(long, {"low": 94, "high": 96, "close": 95}, self._ind(), 2) is None
+        short = Position(106, 1, 106, 108, 100, False, "SHORT")
+        assert s.exit_decision(short, {"low": 99, "high": 107}, self._ind(), 1) == ("take_profit", 100.0, True)
+
+    def test_efficiency_ratio(self):
+        from shark.strategies.mean_reversion_v2 import efficiency_ratio
+        assert efficiency_ratio([1, 2, 3, 4, 5], 4) == 1.0
+        assert efficiency_ratio([1, 2, 1, 2, 1], 4) == 0.0

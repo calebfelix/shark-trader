@@ -87,6 +87,18 @@ def find_bot_pids() -> list[int]:
     return pids
 
 
+def running_strategy(pids: list[int]) -> str | None:
+    """The --strategy the running bot was started with (None if not running/unknown)."""
+    for pid in pids:
+        try:
+            cmd = psutil.Process(pid).cmdline()
+        except psutil.Error:
+            continue
+        if "--strategy" in cmd and cmd.index("--strategy") + 1 < len(cmd):
+            return cmd[cmd.index("--strategy") + 1]
+    return None
+
+
 def start_bot(strategy: str, confirm_live: bool = False) -> tuple[bool, str]:
     if strategy not in STRATEGIES:
         return False, f"Unknown strategy '{strategy}'."
@@ -298,7 +310,7 @@ def build_state() -> dict:
     pids = find_bot_pids()
     return {
         "now": datetime.now().isoformat(timespec="seconds"),
-        "bot": {"running": bool(pids), "pids": pids},
+        "bot": {"running": bool(pids), "pids": pids, "strategy": running_strategy(pids)},
         "config": {"symbol": cfg["symbol"], "dry_run": cfg.get("dry_run") is True,
                    "account_capital": cfg["account_capital"],
                    "risk_per_trade_pct": cfg["risk_per_trade_pct"],
@@ -739,7 +751,13 @@ function render(d){
   $("startbtn").textContent = c.dry_run ? "Start" : "Start LIVE";
   const sel = $("strategy");
   if (!sel.options.length) d.strategies.forEach(n => sel.append(new Option(n, n)));
-  if (!sel.dataset.set){ sel.value = d.strategies.includes("psar_trend") ? "psar_trend" : d.strategies[0]; sel.dataset.set = "1"; }
+  if (d.bot.running && d.bot.strategy && d.strategies.includes(d.bot.strategy)) sel.value = d.bot.strategy;
+  else if (!sel.dataset.set){
+    let saved = null; try { saved = localStorage.getItem("strategy"); } catch(e){}
+    sel.value = d.strategies.includes(saved) ? saved : (d.strategies.includes("psar_trend") ? "psar_trend" : d.strategies[0]);
+  }
+  sel.dataset.set = "1";
+  sel.disabled = d.bot.running;
   $("startbtn").disabled = busy || d.bot.running;
   $("stopbtn").disabled = busy || !d.bot.running;
   renderKpis(d.stats);
@@ -764,6 +782,9 @@ async function act(path, body){
   busy = false; setTimeout(refresh, 1500); refresh();
 }
 
+$("strategy").addEventListener("change", () => {
+  try { localStorage.setItem("strategy", $("strategy").value); } catch(e){}
+});
 $("startbtn").addEventListener("click", () => {
   const live = state && !state.config.dry_run;
   if (live && !confirm("Start a LIVE run? This will place REAL orders on your Shark Exchange account.")) return;
