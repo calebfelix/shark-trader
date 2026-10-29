@@ -207,3 +207,28 @@ def test_dashboard_refuses_live_start(monkeypatch):
     monkeypatch.setattr(dashboard, "load_config", lambda: {"dry_run": False, "api_key": "k", "api_secret": "s"})
     ok, msg = dashboard.start_bot("macd_multi", confirm_live=True)
     assert not ok and "dry-run only" in msg
+
+
+def test_backtest_runs_the_same_step_and_books_r(monkeypatch):
+    candles = [candle(106, 106, 106, 106, t=i * M30_MS) for i in range(3)]
+    candles += [candle(104, 104.5, 103.5, 104, t=3 * M30_MS),             # cross -> LONG @104, stop 100, tp 105
+                candle(104, 105.2, 103.9, 105, t=4 * M30_MS),             # target
+                candle(105, 105, 105, 105, t=5 * M30_MS)]
+    strat = MacdMultiStrategy(P)
+    monkeypatch.setattr(strat, "series", lambda c30, c4: [
+        (-0.5, -0.8, 100.0) if c["time"] == 3 * M30_MS else (-2.0, -1.0, 100.0) for c in c30])
+    legs, curve = multi_leg_engine.backtest(strat, candles, [], dict(CFG, risk_per_trade_pct=1))
+    (leg,) = legs
+    assert leg["reason"] == "take_profit" and leg["qty"] == pytest.approx(100 / 4)   # 1% of 10000 / 4-point stop
+    fees = (104 * 0.04 * 1.18 + 105 * 0.016 * 1.18) / 100 * leg["qty"]
+    assert leg["net"] == pytest.approx(25 - fees) and leg["r"] == pytest.approx((25 - fees) / 100)
+    assert curve[-1] == pytest.approx(10000 + 25 - fees)
+
+
+def test_backtest_closes_open_legs_at_the_end(monkeypatch):
+    candles = [candle(106, 106, 106, 106, t=i * M30_MS) for i in range(2)] + [candle(104, 104, 104, 104, t=2 * M30_MS)]
+    strat = MacdMultiStrategy(P)
+    monkeypatch.setattr(strat, "series", lambda c30, c4: [
+        (-0.5, -0.8, 100.0) if c["time"] == 2 * M30_MS else (-2.0, -1.0, 100.0) for c in c30])
+    legs, _ = multi_leg_engine.backtest(strat, candles, [], CFG)
+    assert [x["reason"] for x in legs] == ["end_of_data"]

@@ -36,8 +36,15 @@ def build_strategy(name: str, config: dict):
 def cmd_backtest(args, config: dict):
     strategy = build_strategy(args.strategy, config)
     if getattr(strategy, "multi_leg", False):
-        raise SystemExit(f"{strategy.name} has several entries per setup; the single-position backtester can't "
-                         f"run it. Use the research script from the session that tested it.")
+        p, exchange = strategy.params, ExchangeClient(config["base_url"])
+        n30 = config["backtest"]["lookback_candles"]
+        print(f"Fetching {n30} {p['kline_interval']} + {n30 // 8 + p['history_4h']} {p['trend_interval']} candles "
+              f"for {config['symbol']}...")
+        c30 = exchange.get_klines(config["symbol"], p["kline_interval"], n30)[:-1]          # drop the forming candle
+        c4 = exchange.get_klines(config["symbol"], p["trend_interval"], n30 // 8 + p["history_4h"])[:-1]
+        legs, curve = multi_leg_engine.backtest(strategy, c30, c4, config)
+        multi_leg_engine.print_backtest(strategy.name, config["symbol"], legs, curve, config["account_capital"])
+        return
     exchange = ExchangeClient(config["base_url"])
 
     interval = strategy.params["kline_interval"]
