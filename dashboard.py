@@ -105,6 +105,8 @@ def start_bot(strategy: str, confirm_live: bool = False) -> tuple[bool, str]:
         return False, f"Unknown strategy '{strategy}'."
     cfg = load_config()
     live = cfg.get("dry_run") is not True
+    if live and getattr(STRATEGIES[strategy], "multi_leg", False):
+        return False, f"{strategy} is dry-run only - switch to dry-run mode to run it."
     if live:
         if not (cfg["api_key"] and cfg["api_secret"]):
             return False, "Real-account mode needs API credentials - save them on the Settings page."
@@ -301,7 +303,8 @@ def simulated_position_view(p: dict, last: float) -> dict:
     return {"simulated": True, "side": p["side"], "qty": p["qty"], "entry_price": p["entry_price"],
             "last_price": last, "unrealised_inr": unrealised, "entry_fee_inr": entry_fee,
             "est_exit_fee_inr": exit_fee, "net_if_closed_now_inr": unrealised - entry_fee - exit_fee,
-            "stop_price": p["stop_loss"], "take_profit": p["take_profit"], "strategy": p.get("strategy")}
+            "stop_price": p["stop_loss"], "take_profit": p["take_profit"], "strategy": p.get("strategy"),
+            "legs": p.get("legs")}
 
 
 def fetch_bot_position() -> dict:
@@ -716,7 +719,7 @@ function renderPosition(p){
   const box = $("position"); box.replaceChildren();
   if (botPos && botPos.ok && botPos.open && botPos.simulated){
     const b = botPos;
-    box.append(el("div",{}, el("b",{}, "Simulated position: " + b.side + " " + fmt(b.qty,4) + " @ " + fmt(b.entry_price))));
+    box.append(el("div",{}, el("b",{}, "Simulated position: " + b.side + " " + fmt(b.qty,4) + " @ " + fmt(b.entry_price) + (b.legs ? "  (" + b.legs + " entries, average price)" : ""))));
     box.append(row("Last price", fmt(b.last_price)));
     box.append(row("Unrealised P&L", signed(b.unrealised_inr) + " ₹", cls(b.unrealised_inr)));
     box.append(row("Entry fee (estimated)", "−" + fmt(b.entry_fee_inr) + " ₹", "bad"));

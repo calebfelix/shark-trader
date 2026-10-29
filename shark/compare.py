@@ -59,6 +59,9 @@ def run_compare(config: dict, exchange, names: list[str], days: int, max_candles
     print(f"Comparing {', '.join(names)} on {symbol} - realistic fills "
           f"(taker entries/exits, {config['backtest'].get('slippage_pct', 0.02)}% slippage, gaps fill at the open)\n")
     for name in names:
+        if getattr(STRATEGIES[name], "multi_leg", False):
+            print(f"=== {name}: skipped (several entries per setup - not supported by this backtester)\n")
+            continue
         interval = config["strategies"][name]["kline_interval"]
         per_day = 1440 / INTERVAL_MINUTES[interval]
         want = int(days * per_day)

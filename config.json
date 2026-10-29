@@ -83,6 +83,43 @@
       "allow_short": true,
       "min_profit_to_fee_ratio": 1.5,
       "fallback_stop_pct": 2.0
+    },
+    "supply_demand": {
+      "kline_interval": "1h",
+      "atr_period": 14,
+      "imp_mult": 1.8,
+      "base_body_frac": 0.6,
+      "max_base": 3,
+      "max_age": 100,
+      "max_zone_atr": 1.5,
+      "wick_frac": 0.4,
+      "stop_buffer_atr": 0.25,
+      "min_stop_atr": 0.4,
+      "max_stop_atr": 3.0,
+      "rr": 2.0,
+      "max_bars": 48,
+      "trend_filter": false,
+      "trend_period": 200,
+      "min_profit_to_fee_ratio": 2.0,
+      "fallback_stop_pct": 1.5
+    },
+    "macd_multi": {
+      "kline_interval": "30m",
+      "trend_interval": "4h",
+      "ema_period": 200,
+      "macd_fast": 12,
+      "macd_slow": 26,
+      "macd_signal": 9,
+      "max_entries": 3,
+      "tp_r": [
+        0.25,
+        0.25,
+        0.5
+      ],
+      "min_stop_pct": 3.0,
+      "min_gap_frac": 0.1,
+      "history_30m": 400,
+      "history_4h": 1000
     }
   }
 }

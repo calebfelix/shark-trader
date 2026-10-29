@@ -299,3 +299,68 @@ class TestMeanReversionV2:
         from shark.strategies.mean_reversion_v2 import efficiency_ratio
         assert efficiency_ratio([1, 2, 3, 4, 5], 4) == 1.0
         assert efficiency_ratio([1, 2, 1, 2, 1], 4) == 0.0
+
+
+class TestSupplyDemand:
+    P = {"atr_period": 14, "imp_mult": 1.8, "base_body_frac": 0.6, "max_base": 3, "max_age": 25, "max_zone_atr": 1.5,
+         "wick_frac": 0.4, "stop_buffer_atr": 0.25, "min_stop_atr": 0.4, "max_stop_atr": 3.0, "rr": 2.0,
+         "max_bars": 10, "trend_filter": False, "trend_period": 200, "min_profit_to_fee_ratio": 2.0,
+         "fallback_stop_pct": 1.5}
+
+    @staticmethod
+    def c(o, h, l, cl):
+        return {"open": o, "high": h, "low": l, "close": cl, "volume": 1.0}
+
+    def _s(self, **kw):
+        from shark.strategies.supply_demand import SupplyDemandStrategy
+        return SupplyDemandStrategy({**self.P, **kw})
+
+    def _demand_series(self, tail):
+        """Flat chop around 100 (range ~2), a tiny base at 99.5-100, a +6 impulse, a drift up, then `tail`."""
+        c = self.c
+        out = [c(100, 101, 99, 100.2), c(100.2, 101, 99, 99.8)] * 20
+        out += [c(99.8, 100.1, 99.5, 100.0)]                          # base: body 0.2, low 99.5
+        out += [c(100.0, 106.2, 99.9, 106.0)]                         # impulse: body 6 >> 1.8 x ATR(~2), breaks the base
+        out += [c(106.0, 108, 105.5, 107.5), c(107.5, 109, 107, 108.5), c(108.5, 109.5, 108, 109)]
+        return out + tail
+
+    def test_rejection_of_fresh_demand_zone_signals_long(self):
+        ind = self._s().compute_indicators(self._demand_series([self.c(108, 108.2, 99.6, 105.0)]))
+        # a deep retrace tags the zone (low 99.6 <= proximal 100.0) and closes far above it, long lower wick
+        sig = ind["signal"]
+        assert sig and sig["side"] == "LONG" and sig["stop"] < 99.5
+        plan = self._s().entry_plan(105.0, {}, ind)
+        assert plan.side == "LONG" and plan.stop_loss_price == sig["stop"]
+        assert abs((plan.take_profit_price - 105.0) - 2.0 * (105.0 - sig["stop"])) < 1e-9
+
+    def test_no_signal_without_a_touch(self):
+        ind = self._s().compute_indicators(self._demand_series([self.c(109, 109.5, 108, 108.5)]))
+        assert ind["signal"] is None and ind["zones"] >= 1
+
+    def test_used_zone_is_stale(self):
+        touched = self._demand_series([self.c(109, 109.2, 99.8, 105.0)])            # first touch, already happened
+        ind = self._s().compute_indicators(touched + [self.c(105, 106, 99.7, 104.0)])   # a second visit
+        assert ind["signal"] is None
+
+    def test_close_through_the_zone_is_not_a_rejection(self):
+        ind = self._s().compute_indicators(self._demand_series([self.c(109, 109.2, 98.0, 99.0)]))
+        assert ind["signal"] is None
+
+    def test_supply_zone_mirror(self):
+        c = self.c
+        out = [c(100, 101, 99, 99.8), c(99.8, 101, 99, 100.2)] * 20
+        out += [c(100.2, 100.5, 99.9, 100.0)]
+        out += [c(100.0, 100.1, 93.8, 94.0)]
+        out += [c(94, 94.5, 92, 92.5), c(92.5, 93, 91, 91.5), c(91.5, 92, 90.5, 91)]
+        out += [c(92, 100.3, 91.8, 95.0)]                                           # retrace into the zone, rejected
+        sig = self._s().compute_indicators(out)["signal"]
+        assert sig and sig["side"] == "SHORT" and sig["stop"] > 100.5
+
+    def test_exits(self):
+        from shark.strategies.base import Position
+        s = self._s()
+        long = Position(105, 1, 105, 99, 117, False, "LONG")
+        assert s.exit_decision(long, {"low": 98, "high": 106}, None, 1)[0] == "stop_loss"
+        assert s.exit_decision(long, {"low": 104, "high": 118}, None, 1) == ("take_profit", 117, True)
+        assert s.exit_decision(long, {"low": 104, "high": 106, "close": 105}, None, 10)[0] == "time_stop"
+        assert s.exit_decision(long, {"low": 104, "high": 106, "close": 105}, None, 3) is None

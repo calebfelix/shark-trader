@@ -23,7 +23,7 @@ from shark.orders import OrderExecutor
 from shark.performance import PerformanceTracker
 from shark.risk import RiskManager
 from shark.strategies import STRATEGIES
-from shark import backtest_engine, live_engine
+from shark import backtest_engine, live_engine, multi_leg_engine
 
 
 def build_strategy(name: str, config: dict):
@@ -35,6 +35,9 @@ def build_strategy(name: str, config: dict):
 
 def cmd_backtest(args, config: dict):
     strategy = build_strategy(args.strategy, config)
+    if getattr(strategy, "multi_leg", False):
+        raise SystemExit(f"{strategy.name} has several entries per setup; the single-position backtester can't "
+                         f"run it. Use the research script from the session that tested it.")
     exchange = ExchangeClient(config["base_url"])
 
     interval = strategy.params["kline_interval"]
@@ -61,6 +64,10 @@ def cmd_compare(args, config: dict):
 
 def cmd_run(args, config: dict):
     strategy = build_strategy(args.strategy, config)
+    multi_leg = getattr(strategy, "multi_leg", False)
+    if multi_leg and config["dry_run"] is not True:
+        raise SystemExit(f"{strategy.name} is dry-run only (the live engine can't manage several entries "
+                         f"with separate targets). Switch to dry-run mode to run it.")
     exchange = ExchangeClient(config["base_url"], config["api_key"], config["api_secret"])
     # Which exchange orders/positions are ours (survives restarts). Dry run places nothing, so memory-only.
     registry = BotRegistry(None if config["dry_run"] else f"bot_state_{config['symbol']}.json")
@@ -140,6 +147,9 @@ def cmd_run(args, config: dict):
     signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
+    if multi_leg:
+        multi_leg_engine.run(strategy, exchange, risk, tracker, config, quote_to_inr_rate=quote_to_inr_rate)
+        return
     live_engine.run(strategy, exchange, executor, risk, tracker, config, quote_to_inr_rate=quote_to_inr_rate)
 
 
