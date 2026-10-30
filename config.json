@@ -116,7 +116,7 @@
         0.25,
         0.5
       ],
-      "min_stop_pct": 3.0,
+      "min_stop_pct": 9.0,
       "min_gap_frac": 0.1,
       "history_30m": 400,
       "history_4h": 1000
