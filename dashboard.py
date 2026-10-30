@@ -589,6 +589,7 @@ input[type=password],input[type=text]{width:100%;font:inherit;color:var(--ink);b
       <span class="pill" id="runpill"></span>
       <span class="pill dry" id="drypill" hidden>DRY RUN</span>
       <span class="pill off" id="livepill" hidden>LIVE - REAL MONEY</span>
+      <a class="navlink" href="/options/">Options</a>
       <a class="navlink" href="/health">Health</a>
       <a class="navlink" href="/settings">Settings</a>
       <select id="strategy" aria-label="Strategy"></select>
